@@ -35,6 +35,11 @@ var rerolls_left: int = MAX_REROLLS
 var current_player: int = 0
 var game_over: bool = false
 
+# dice_results의 기본값은 그 자체로 유효한(전부 같은) 조합이라, 한 번도 굴리기
+# 전에는 이 플래그로 "아직 진짜 주사위 값이 아니다"를 구분한다. 이게 없으면
+# Yacht 같은 족보가 시작하자마자 잡히는 문제가 재현된다.
+var has_rolled: bool = false
+
 # player_score_confirmed[player][category] / player_confirmed_scores[player][category]
 var player_score_confirmed: Array = []
 var player_confirmed_scores: Array = []
@@ -92,7 +97,7 @@ func toggle_lock(index: int) -> void:
 
 
 func confirm_category(category_index: int) -> void:
-	if game_over or player_score_confirmed[current_player][category_index]:
+	if not has_rolled or game_over or player_score_confirmed[current_player][category_index]:
 		return
 
 	var value := calculate_score(category_index, dice_results)
@@ -131,6 +136,8 @@ func get_confirmed_score(player: int, category_index: int) -> int:
 
 
 func preview_score(category_index: int) -> int:
+	if not has_rolled:
+		return 0
 	return calculate_score(category_index, dice_results)
 
 
@@ -186,6 +193,7 @@ func _begin_turn() -> void:
 
 
 func _roll_unlocked_dice() -> void:
+	has_rolled = true
 	for i in dice_results.size():
 		if dice_locked[i]:
 			continue
