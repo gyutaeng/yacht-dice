@@ -51,18 +51,18 @@ func _ready() -> void:
 		label.gui_input.connect(_on_dice_gui_input.bind(i))
 
 	score_calculators = [
-		_calc_aces,
-		_calc_deuces,
-		_calc_threes,
-		_calc_fours,
-		_calc_fives,
-		_calc_sixes,
-		_calc_choice,
-		_calc_four_of_a_kind,
-		_calc_full_house,
-		_calc_small_straight,
-		_calc_large_straight,
-		_calc_yacht,
+		calc_aces,
+		calc_deuces,
+		calc_threes,
+		calc_fours,
+		calc_fives,
+		calc_sixes,
+		calc_choice,
+		calc_four_of_a_kind,
+		calc_full_house,
+		calc_small_straight,
+		calc_large_straight,
+		calc_yacht,
 	]
 
 	_build_scoreboard()
@@ -154,49 +154,100 @@ func _update_score_previews() -> void:
 		score_labels[i].text = str(value)
 
 
-func _calc_aces(dice: Array[int]) -> int:
+func calc_aces(dice: Array[int]) -> int:
+	return _count_value(dice, 1) * 1
+
+
+func calc_deuces(dice: Array[int]) -> int:
+	return _count_value(dice, 2) * 2
+
+
+func calc_threes(dice: Array[int]) -> int:
+	return _count_value(dice, 3) * 3
+
+
+func calc_fours(dice: Array[int]) -> int:
+	return _count_value(dice, 4) * 4
+
+
+func calc_fives(dice: Array[int]) -> int:
+	return _count_value(dice, 5) * 5
+
+
+func calc_sixes(dice: Array[int]) -> int:
+	return _count_value(dice, 6) * 6
+
+
+func calc_choice(dice: Array[int]) -> int:
+	return _sum(dice)
+
+
+func calc_four_of_a_kind(dice: Array[int]) -> int:
+	var counts := _count_all(dice)
+	for value in counts:
+		if counts[value] >= 4:
+			return _sum(dice)
 	return 0
 
 
-func _calc_deuces(dice: Array[int]) -> int:
+func calc_full_house(dice: Array[int]) -> int:
+	var counts := _count_all(dice)
+	var counts_sorted := counts.values()
+	counts_sorted.sort()
+	if counts_sorted == [2, 3]:
+		return 25
 	return 0
 
 
-func _calc_threes(dice: Array[int]) -> int:
+func calc_small_straight(dice: Array[int]) -> int:
+	var unique_values := {}
+	for d in dice:
+		unique_values[d] = true
+
+	var straights := [[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]]
+	for straight in straights:
+		var has_all := true
+		for v in straight:
+			if not unique_values.has(v):
+				has_all = false
+				break
+		if has_all:
+			return 15
 	return 0
 
 
-func _calc_fours(dice: Array[int]) -> int:
+func calc_large_straight(dice: Array[int]) -> int:
+	var sorted_dice := dice.duplicate()
+	sorted_dice.sort()
+	if sorted_dice == [1, 2, 3, 4, 5] or sorted_dice == [2, 3, 4, 5, 6]:
+		return 30
 	return 0
 
 
-func _calc_fives(dice: Array[int]) -> int:
-	return 0
+func calc_yacht(dice: Array[int]) -> int:
+	for d in dice:
+		if d != dice[0]:
+			return 0
+	return 50
 
 
-func _calc_sixes(dice: Array[int]) -> int:
-	return 0
+func _count_value(dice: Array[int], value: int) -> int:
+	var count := 0
+	for d in dice:
+		if d == value:
+			count += 1
+	return count
 
 
-func _calc_choice(dice: Array[int]) -> int:
-	return 0
+func _count_all(dice: Array[int]) -> Dictionary:
+	var counts := {}
+	for d in dice:
+		counts[d] = counts.get(d, 0) + 1
+	return counts
 
 
-func _calc_four_of_a_kind(dice: Array[int]) -> int:
-	return 0
-
-
-func _calc_full_house(dice: Array[int]) -> int:
-	return 0
-
-
-func _calc_small_straight(dice: Array[int]) -> int:
-	return 0
-
-
-func _calc_large_straight(dice: Array[int]) -> int:
-	return 0
-
-
-func _calc_yacht(dice: Array[int]) -> int:
-	return 0
+func _sum(dice: Array[int]) -> int:
+	var total := 0
+	for d in dice:
+		total += d
+	return total
