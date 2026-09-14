@@ -99,3 +99,25 @@ offset_bottom = 820.0
 custom_minimum_size = Vector2(690, 0)
 layout_mode = 2
 theme_override_constants/separation = 6
+
+[node name="TotalScoreLabel" type="Label" parent="."]
+offset_left = 226.0
+offset_top = 830.0
+offset_right = 926.0
+offset_bottom = 860.0
+theme_override_font_sizes/font_size = 24
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "합계: 0"
+
+[node name="GameOverLabel" type="Label" parent="."]
+visible = false
+offset_left = 226.0
+offset_top = 865.0
+offset_right = 926.0
+offset_bottom = 900.0
+theme_override_font_sizes/font_size = 28
+theme_override_colors/font_color = Color(0.9, 0.2, 0.2, 1)
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "게임 종료! 최종 합계: 0"
