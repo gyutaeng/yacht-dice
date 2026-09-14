@@ -78,3 +78,24 @@ offset_top = 480.0
 offset_right = 676.0
 offset_bottom = 530.0
 text = "새 턴 시작"
+
+[node name="ScoreboardTitle" type="Label" parent="."]
+offset_left = 226.0
+offset_top = 555.0
+offset_right = 926.0
+offset_bottom = 585.0
+theme_override_font_sizes/font_size = 24
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "점수표"
+
+[node name="ScoreboardScroll" type="ScrollContainer" parent="."]
+offset_left = 226.0
+offset_top = 590.0
+offset_right = 926.0
+offset_bottom = 820.0
+
+[node name="ScoreList" type="VBoxContainer" parent="ScoreboardScroll"]
+custom_minimum_size = Vector2(690, 0)
+layout_mode = 2
+theme_override_constants/separation = 6
