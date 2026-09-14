@@ -6,6 +6,9 @@ signal state_changed
 const MAX_REROLLS := 2
 const NUM_PLAYERS := 2
 
+# CATEGORY_NAMES에서 "Yacht"의 인덱스. yacht_scored 이벤트 판정에 쓴다.
+const YACHT_CATEGORY_INDEX := 11
+
 const CATEGORY_NAMES: Array[String] = [
 	"Aces",
 	"Deuces",
@@ -72,11 +75,13 @@ func roll() -> void:
 
 	_roll_unlocked_dice()
 	rerolls_left -= 1
+	_emit_dice_rolled()
 	state_changed.emit()
 
 
 func toggle_lock(index: int) -> void:
 	dice_locked[index] = not dice_locked[index]
+	GameEvents.die_held_changed.emit(index, dice_locked[index])
 	state_changed.emit()
 
 
@@ -88,8 +93,17 @@ func confirm_category(category_index: int) -> void:
 	player_confirmed_scores[current_player][category_index] = value
 	player_score_confirmed[current_player][category_index] = true
 
+	GameEvents.score_committed.emit(current_player, category_index, value)
+	if value == 0:
+		GameEvents.zero_scored.emit(current_player, category_index)
+	if category_index == YACHT_CATEGORY_INDEX and value == 50:
+		GameEvents.yacht_scored.emit(current_player)
+	GameEvents.turn_ended.emit(current_player)
+
 	if _player_completed(0) and _player_completed(1):
 		game_over = true
+		var scores: Array[int] = [get_player_total(0), get_player_total(1)]
+		GameEvents.game_ended.emit(get_winner(), scores)
 	else:
 		current_player = 1 - current_player
 		_begin_turn()
@@ -131,10 +145,13 @@ func get_winner() -> int:
 
 
 func _begin_turn() -> void:
+	GameEvents.turn_started.emit(current_player)
+
 	rerolls_left = MAX_REROLLS
 	for i in dice_locked.size():
 		dice_locked[i] = false
 	_roll_unlocked_dice()
+	_emit_dice_rolled()
 
 
 func _roll_unlocked_dice() -> void:
@@ -142,6 +159,13 @@ func _roll_unlocked_dice() -> void:
 		if dice_locked[i]:
 			continue
 		dice_results[i] = _rng.randi_range(1, 6)
+
+
+func _emit_dice_rolled() -> void:
+	GameEvents.dice_rolled.emit(dice_results.duplicate(), rerolls_left)
+	for i in CATEGORY_NAMES.size():
+		if not player_score_confirmed[current_player][i]:
+			GameEvents.score_previewed.emit(i, preview_score(i))
 
 
 func _player_completed(player: int) -> bool:
