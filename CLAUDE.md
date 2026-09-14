@@ -28,3 +28,52 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - **원칙 5 위반 (GameEvents 싱글톤 부재)**: 프로젝트에 autoload 싱글톤 자체가 하나도 없다(`project.godot`에 `[autoload]` 섹션 없음). 버튼 클릭은 `Main.gd` 내부 핸들러에 바로 연결되어 있고(예: 55~56행, 166행), 턴 전환·점수 갱신도 전부 `Main.gd`가 자기 자신의 함수를 직접 호출하는 방식(`_switch_to_player()`, `_update_score_previews()` 등)이라 방출자/구독자 구분이 없다.
 - **원칙 1 관련 미검증 사항**: `project.godot`에 `3d/physics_engine="Jolt Physics"`가 설정되어 있는데, 이 프로젝트가 실제로 3D 물리를 쓰는지, Jolt Physics가 HTML5 export에서 정상 동작하는지 아직 한 번도 확인된 적이 없다. HTML5 export 프리셋도 아직 구성되어 있지 않다(`export_presets.cfg` 없음).
 - **원칙 3·6은 현재 해당 사항 없음**: 파일 업로드/에셋 로딩 기능 자체가 아직 구현되지 않아 위반 여부를 판단할 코드가 없다. 해당 기능을 만들 때부터 원칙 3(PackedByteArray 기준)·6(화이트리스트/크기 검사)을 지켜야 한다.
+
+## 현재 진행 상황
+
+*큰 작업이 끝날 때마다 이 섹션을 갱신한다. 새 세션에서 이어갈 때는 여기부터 읽는다.*
+
+### 완료한 단계
+- 0-1, 0-2: GameState/UI 분리, RNG 주입
+- 0-3: GameEvents 이벤트 버스 도입
+- 상단 보너스 규칙(63점 이상 +35점)
+- 0-4: 족보 회귀 테스트 + 통합 테스트 러너(scripts/tests/)
+- 0.5-1: GameState 2~4인 확장
+- 0.5-2: UI 레이아웃 재구성, 종료 오버레이, 점수 확정 2단계
+- 0.5-3: 다인수 테스트 + 1-1 캐릭터 데이터 모델(CharacterProfile/CharacterLibrary)
+- 1-2: 바이트 기반 에셋 로더(AssetLoader) — 포맷 확장, 매직바이트 검사, LRU 캐시
+- 1-3: 캐릭터 스테이지 — 초상 크로스페이드, 실루엣 폴백
+- 1-3B: 턴 시작 시 자동 굴리기 제거(수동 굴리기로 변경), 작은/큰 초상 파일 분리(thumbnail_file)
+- 1-3C: 특수 족보(야추 등) 연출 — 팝업 라벨, 입력 차단
+- 1-4: VoiceBank(캐릭터 보이스 재생) 도입
+- 1-4B: 보이스 이벤트 테이블 10개로 확정, game_started 시그널 추가, SfxBank(게임 내장 효과음) 도입, 디버그 단축키를 Ctrl+Shift 조합으로 전환(F8/F9/F10이 Godot 에디터 자체 단축키와 충돌해서)
+- 1-5: FilePicker(데스크톱/웹 파일 선택 추상화)
+
+### 1-5(파일 선택) 상태 — 다음에 이어서 할 일
+- 데스크톱 구현(FilePickerDesktop)은 검증 완료: FileDialog 시그널을 시뮬레이션해서 실제 파일을 백그라운드 스레드로 읽고, 확장자 필터링, 취소까지 전부 windowed 실행으로 확인했다.
+- **웹 구현(FilePickerWeb)은 아직 실제 브라우저에서 테스트하지 못했다 — 다음 세션에서 가장 먼저 할 일이다.** JavaScriptBridge API 존재 여부는 ClassDB로 확인했지만, 실제 브라우저에서 파일 선택창이 뜨는지·취소 감지가 동작하는지는 검증되지 않았다.
+- `scripts/io/`, `scripts/tests/suites/test_file_picker.gd`는 이 섹션을 쓰는 시점 기준 아직 커밋되지 않았다(`git status`로 확인할 것).
+
+### 웹 테스트 절차
+1. Godot 에디터 `프로젝트 > 내보내기`에서 Web export 프리셋 추가(export template 설치 필요).
+2. export한 폴더를 정적 파일 서버로 서빙한다 — `file://`로 직접 열면 브라우저가 막는다: `python -m http.server 8060` 후 `http://localhost:8060/`로 접속.
+3. FilePicker를 쓰는 버튼을 **실제로 마우스로 클릭**해서 테스트한다 — 자동화 스크립트로 흉내 낸 클릭은 브라우저가 파일 선택창을 막을 수 있어서 의미가 없다(이번 구현이 지키려는 바로 그 제약).
+4. 확인 포인트: 파일 선택창이 뜨는지 / 여러 개 골랐을 때 다 들어오는지 / 취소 시 `pick_cancelled`만 오고 에러가 없는지(개발자 도구 콘솔) / 허용 안 한 확장자를 억지로 골라도 걸러지는지.
+
+### 현재 전체 테스트 개수
+373개 (`scripts/tests/test_runner.tscn`, 전부 통과 — 이 중 FilePicker 쪽 12개는 위에서 말했듯 아직 미커밋 상태일 수 있다).
+
+### 디버그 단축키 (`scripts/dev/debug_hotkeys.gd`, 에디터에서만 동작)
+- Ctrl+Shift+1 : 야추로 강제 지정
+- Ctrl+Shift+2 : 라지 스트레이트로 강제 지정
+- Ctrl+Shift+3 : 풀 하우스로 강제 지정
+- Ctrl+Shift+4 : 포카드로 강제 지정
+- Ctrl+Shift+S : 현재 플레이어의 빈 칸 하나 자동 확정
+- Ctrl+Shift+A : 게임이 끝날 때까지 자동 진행
+(텍스트 입력 위젯에 포커스가 있으면 전부 무시된다.)
+
+### 남은 단계
+- 1-6: 캐릭터 편집 UI(이름/초상/보이스 업로드 — 여기서 FilePicker와 VoiceBank를 실제로 연결한다)
+- 1-7: 캐릭터 팩(내보내기/불러오기)
+- 1-8: 웹 빌드 최종 검증
+- Phase 2: 온라인 멀티플레이
