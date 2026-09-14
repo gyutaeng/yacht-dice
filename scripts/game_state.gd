@@ -11,6 +11,20 @@ const DEFAULT_PLAYER_COUNT := 2
 # CATEGORY_NAMES에서 "Yacht"의 인덱스. yacht_scored 이벤트 판정에 쓴다.
 const YACHT_CATEGORY_INDEX := 11
 
+# special_hand_rolled 판정에 쓰는 나머지 "좋은 족보" 인덱스.
+const FOUR_OF_A_KIND_CATEGORY_INDEX := 7
+const FULL_HOUSE_CATEGORY_INDEX := 8
+const LARGE_STRAIGHT_CATEGORY_INDEX := 10
+
+# 앞쪽이 더 높은 우선순위. 야추는 포카드이기도 해서, 여러 개가 동시에
+# 성립하면 이 순서에서 가장 앞의 것 하나만 special_hand_rolled로 띄운다.
+const SPECIAL_HAND_PRIORITY: Array[int] = [
+	YACHT_CATEGORY_INDEX,
+	LARGE_STRAIGHT_CATEGORY_INDEX,
+	FULL_HOUSE_CATEGORY_INDEX,
+	FOUR_OF_A_KIND_CATEGORY_INDEX,
+]
+
 # 상단 섹션(Aces~Sixes) 보너스 규칙. 나중에 조정 가능하도록 상수로 뺐다.
 const UPPER_BONUS_THRESHOLD := 63
 const UPPER_BONUS_POINTS := 35
@@ -47,6 +61,11 @@ var has_rolled: bool = false
 var player_score_confirmed: Array = []
 var player_confirmed_scores: Array = []
 var player_bonus_achieved: Array[bool] = []
+
+# SPECIAL_HAND_PRIORITY 안에서의 인덱스(랭크). -1이면 이번 턴엔 아직 아무것도 안 띄움.
+# 랭크가 낮을수록(=더 앞 순위) 더 좋은 족보라서, "이미 띄운 것보다 더 좋은 게
+# 새로 성립했을 때만" 다시 띄우는 기준으로 쓴다.
+var _shown_special_hand_rank_this_turn: int = -1
 
 var _rng: RandomNumberGenerator
 var _score_calculators: Array[Callable] = []
@@ -206,6 +225,7 @@ func _begin_turn() -> void:
 
 	rolls_left = MAX_ROLLS_PER_TURN
 	has_rolled = false
+	_shown_special_hand_rank_this_turn = -1
 	for i in dice_locked.size():
 		dice_locked[i] = false
 
@@ -220,9 +240,32 @@ func _roll_unlocked_dice() -> void:
 
 func _emit_dice_rolled() -> void:
 	GameEvents.dice_rolled.emit(dice_results.duplicate(), rolls_left)
+	_emit_special_hand_if_any()
 	for i in CATEGORY_NAMES.size():
 		if not player_score_confirmed[current_player][i]:
 			GameEvents.score_previewed.emit(i, preview_score(i))
+
+
+# 이번 굴리기에서 성립하는 "좋은 족보" 중 가장 높은 우선순위 하나만 골라 emit한다.
+# 이미 확정한 칸은 후보에서 제외한다(그 칸은 다시 확정할 수 없으므로 띄워봐야 의미가
+# 없다). 같은 턴에 이미 보여준 것과 같거나 더 낮은 순위면 다시 띄우지 않는다 —
+# 리롤해도 여전히 풀하우스면 조용히 넘어가고, 거기서 야추로 올라가면 그때 띄운다.
+func _emit_special_hand_if_any() -> void:
+	for rank in SPECIAL_HAND_PRIORITY.size():
+		var category := SPECIAL_HAND_PRIORITY[rank]
+		if player_score_confirmed[current_player][category]:
+			continue
+
+		var points := calculate_score(category, dice_results)
+		if points <= 0:
+			continue
+
+		if _shown_special_hand_rank_this_turn != -1 and rank >= _shown_special_hand_rank_this_turn:
+			return
+
+		_shown_special_hand_rank_this_turn = rank
+		GameEvents.special_hand_rolled.emit(current_player, category, points)
+		return
 
 
 func _player_completed(player: int) -> bool:

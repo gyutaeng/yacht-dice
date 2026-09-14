@@ -16,6 +16,10 @@ signal bonus_achieved(player_index: int)
 signal turn_ended(player_index: int)
 signal game_ended(winners: Array[int], scores: Array[int])
 
+# 주사위를 굴린 "직후"(확정 시점이 아니라) 좋은 족보가 성립하면 방출된다.
+# 연출/보이스 양쪽이 이 시그널 하나만 구독하면 되고, 어느 쪽도 서로를 몰라야 한다.
+signal special_hand_rolled(player_index: int, category: int, points: int)
+
 # 캐릭터 보이스 매핑용 문자열 키. 시그널 이름과 1:1로 맞출 필요는 없고,
 # "무슨 일이 일어났는지"를 게임 종류와 무관한 공통 어휘로 찾기 위한 것이다.
 # 같은 캐릭터 팩이 요트다이스/마작 양쪽에서 다 동작하려면 게임별 네임스페이스가 필요하다.
@@ -30,6 +34,9 @@ const Yacht := {
 	REROLL = "yacht.reroll",
 	HOLD = "yacht.hold",
 	YACHT = "yacht.yacht",
+	FOUR_OF_A_KIND = "yacht.four_of_a_kind",
+	FULL_HOUSE = "yacht.full_house",
+	LARGE_STRAIGHT = "yacht.large_straight",
 	BIG_SCORE = "yacht.big_score",
 	SMALL_SCORE = "yacht.small_score",
 	ZERO = "yacht.zero",

@@ -5,6 +5,11 @@ const SMALL_TAG_SIZE := 56.0
 const PORTRAIT_FADE_DURATION := 0.3
 const PLACEHOLDER_PORTRAIT_PATH := "res://assets/placeholder_portrait.png"
 
+# 나중에 실제 효과음으로 바꿀 때 건드릴 곳은 이 한 줄뿐이다.
+const SPECIAL_HAND_SFX_PATH := "res://assets/sfx/special_hand.wav"
+const SPECIAL_HAND_DISPLAY_DURATION := 1.5
+const SPECIAL_HAND_FADE_DURATION := 0.15
+
 var game_state: GameState
 
 var locked_style := StyleBoxFlat.new()
@@ -37,6 +42,7 @@ var _current_portrait_player: int = -1
 var _portrait_tween: Tween
 var _label_tween: Tween
 var _placeholder_texture: Texture2D
+var _special_hand_tween: Tween
 
 @onready var start_screen: Control = $StartScreen
 @onready var game_screen: Control = $GameScreen
@@ -51,6 +57,9 @@ var _placeholder_texture: Texture2D
 @onready var portrait_texture_b: TextureRect = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack/PortraitTextureB
 @onready var big_name_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigNameLabel
 @onready var small_tags_row: HBoxContainer = $GameScreen/Margin/MainHBox/LeftColumn/SmallTagsRow
+@onready var special_hand_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/SpecialHandLabel
+@onready var input_blocker: Control = $GameScreen/InputBlocker
+@onready var special_hand_sfx_player: AudioStreamPlayer = $SpecialHandSfxPlayer
 
 @onready var dice_labels: Array[Label] = [
 	$GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow/Dice1,
@@ -142,6 +151,7 @@ func _ready() -> void:
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
 	_placeholder_texture = load(PLACEHOLDER_PORTRAIT_PATH)
+	special_hand_sfx_player.stream = load(SPECIAL_HAND_SFX_PATH)
 	portrait_texture_a.modulate.a = 1.0
 	portrait_texture_b.modulate.a = 0.0
 	# 처음 전환이 걸리는 시점엔 방금 보이게 된 GameScreen의 레이아웃이 아직
@@ -158,6 +168,10 @@ func _ready() -> void:
 	restart_button.pressed.connect(_on_restart_pressed)
 	to_title_button.pressed.connect(_on_to_title_pressed)
 	quit_confirm_dialog.confirmed.connect(_return_to_title)
+
+	# GameEvents는 앱이 사는 동안 계속 살아있는 autoload라서, game_state처럼
+	# 게임을 새로 시작할 때마다가 아니라 여기서 딱 한 번만 연결한다.
+	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
 
 	for i in dice_labels.size():
 		var label := dice_labels[i]
@@ -208,6 +222,11 @@ func _reset_portrait_transition_state() -> void:
 	portrait_texture_b.modulate.a = 0.0
 	_portrait_front_is_a = true
 	big_name_label.modulate.a = 1.0
+
+	if _special_hand_tween != null and _special_hand_tween.is_valid():
+		_special_hand_tween.kill()
+	special_hand_label.visible = false
+	input_blocker.visible = false
 
 
 func _start_new_game(player_count: int) -> void:
@@ -394,6 +413,35 @@ func _transition_portrait(profile: CharacterProfile, label_text: String) -> void
 	_label_tween.tween_property(big_name_label, "modulate:a", 0.0, PORTRAIT_FADE_DURATION / 2.0)
 	_label_tween.tween_callback(func() -> void: big_name_label.text = label_text)
 	_label_tween.tween_property(big_name_label, "modulate:a", 1.0, PORTRAIT_FADE_DURATION / 2.0)
+
+
+func _on_special_hand_rolled(_player_index: int, category: int, _points: int) -> void:
+	if debug_hotkeys.is_auto_playing:
+		return  # F10 자동 진행 중엔 매번 1.5초씩 멈추면 안 되니 건너뛴다.
+	_play_special_hand_effect(category)
+
+
+# 캐릭터 보이스는 이 함수가 아니라 GameEvents.special_hand_rolled를 직접 구독해서
+# 따로 반응한다(1-4). 여기서는 화면 연출과 효과음만 맡는다.
+func _play_special_hand_effect(category: int) -> void:
+	if _special_hand_tween != null and _special_hand_tween.is_valid():
+		_special_hand_tween.kill()
+
+	special_hand_label.text = GameState.CATEGORY_NAMES[category]
+	special_hand_label.modulate.a = 0.0
+	special_hand_label.visible = true
+	input_blocker.visible = true
+	special_hand_sfx_player.play()
+
+	var hold_duration := SPECIAL_HAND_DISPLAY_DURATION - 2.0 * SPECIAL_HAND_FADE_DURATION
+
+	_special_hand_tween = create_tween()
+	_special_hand_tween.tween_property(special_hand_label, "modulate:a", 1.0, SPECIAL_HAND_FADE_DURATION)
+	_special_hand_tween.tween_interval(hold_duration)
+	_special_hand_tween.tween_property(special_hand_label, "modulate:a", 0.0, SPECIAL_HAND_FADE_DURATION)
+	_special_hand_tween.tween_callback(func() -> void:
+		special_hand_label.visible = false
+		input_blocker.visible = false)
 
 
 func _build_character_area() -> void:

@@ -17,6 +17,10 @@ extends Node
 
 var game_state: GameState
 
+# F10 자동 진행 중인지. Main.gd가 이 플래그를 보고 special_hand_rolled 연출을
+# 건너뛴다 — 안 그러면 48턴짜리 자동 진행이 매번 1.5초씩 멈춰서 너무 느려진다.
+var is_auto_playing: bool = false
+
 
 func _ready() -> void:
 	if not OS.has_feature("editor"):
@@ -57,12 +61,14 @@ func _auto_confirm_one() -> void:
 
 
 func _auto_finish_game() -> void:
+	is_auto_playing = true
 	while not game_state.game_over:
 		_ensure_rolled()
 		var category := _find_open_category()
 		if category == -1:
 			break
 		game_state.confirm_category(category)
+	is_auto_playing = false
 
 
 func _ensure_rolled() -> void:

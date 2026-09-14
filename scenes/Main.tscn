@@ -93,6 +93,19 @@ expand_mode = 1
 [node name="PortraitTextureB" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack"]
 expand_mode = 1
 
+[node name="SpecialHandLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea"]
+visible = false
+layout_mode = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
+theme_override_colors/font_outline_color = Color(0.1, 0.05, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 34
+text = "Yacht"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+
 [node name="BigNameLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
@@ -191,6 +204,12 @@ text = "점수 확정"
 layout_mode = 2
 theme_override_constants/separation = 4
 
+[node name="InputBlocker" type="Control" parent="GameScreen"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 1
+
 [node name="GameOverOverlay" type="Control" parent="."]
 visible = false
 anchor_right = 1.0
@@ -244,6 +263,8 @@ initial_position = 1
 dialog_text = "정말 그만두시겠습니까? 지금까지의 진행 상황은 사라집니다."
 ok_button_text = "그만두기"
 cancel_button_text = "취소"
+
+[node name="SpecialHandSfxPlayer" type="AudioStreamPlayer" parent="."]
 
 [node name="DebugHotkeys" type="Node" parent="."]
 script = ExtResource("2_script")
