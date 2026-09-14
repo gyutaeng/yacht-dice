@@ -14,7 +14,7 @@ signal yacht_scored(player_index: int)
 signal zero_scored(player_index: int, category: int)
 signal bonus_achieved(player_index: int)
 signal turn_ended(player_index: int)
-signal game_ended(winner_index: int, scores: Array[int])
+signal game_ended(winners: Array[int], scores: Array[int])
 
 # 캐릭터 보이스 매핑용 문자열 키. 시그널 이름과 1:1로 맞출 필요는 없고,
 # "무슨 일이 일어났는지"를 게임 종류와 무관한 공통 어휘로 찾기 위한 것이다.

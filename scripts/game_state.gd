@@ -4,7 +4,9 @@ extends RefCounted
 signal state_changed
 
 const MAX_REROLLS := 2
-const NUM_PLAYERS := 2
+const MIN_PLAYER_COUNT := 2
+const MAX_PLAYER_COUNT := 4
+const DEFAULT_PLAYER_COUNT := 2
 
 # CATEGORY_NAMES에서 "Yacht"의 인덱스. yacht_scored 이벤트 판정에 쓴다.
 const YACHT_CATEGORY_INDEX := 11
@@ -34,6 +36,7 @@ var dice_locked: Array[bool] = [false, false, false, false, false]
 var rerolls_left: int = MAX_REROLLS
 var current_player: int = 0
 var game_over: bool = false
+var player_count: int = DEFAULT_PLAYER_COUNT
 
 # dice_results의 기본값은 그 자체로 유효한(전부 같은) 조합이라, 한 번도 굴리기
 # 전에는 이 플래그로 "아직 진짜 주사위 값이 아니다"를 구분한다. 이게 없으면
@@ -43,21 +46,28 @@ var has_rolled: bool = false
 # player_score_confirmed[player][category] / player_confirmed_scores[player][category]
 var player_score_confirmed: Array = []
 var player_confirmed_scores: Array = []
-var player_bonus_achieved: Array[bool] = [false, false]
+var player_bonus_achieved: Array[bool] = []
 
 var _rng: RandomNumberGenerator
 var _score_calculators: Array[Callable] = []
 
 
-func _init(rng: RandomNumberGenerator = null) -> void:
+func _init(requested_player_count: int = DEFAULT_PLAYER_COUNT, rng: RandomNumberGenerator = null) -> void:
+	if requested_player_count < MIN_PLAYER_COUNT or requested_player_count > MAX_PLAYER_COUNT:
+		push_warning("GameState: 인원수 %d는 %d~%d 범위를 벗어나 거부됨. 기본값 %d로 시작." % [requested_player_count, MIN_PLAYER_COUNT, MAX_PLAYER_COUNT, DEFAULT_PLAYER_COUNT])
+		player_count = DEFAULT_PLAYER_COUNT
+	else:
+		player_count = requested_player_count
+
 	_rng = rng
 	if _rng == null:
 		_rng = RandomNumberGenerator.new()
 		_rng.randomize()
 
-	for p in NUM_PLAYERS:
+	for p in player_count:
 		player_score_confirmed.append(_make_bool_array(CATEGORY_NAMES.size(), false))
 		player_confirmed_scores.append(_make_int_array(CATEGORY_NAMES.size(), 0))
+		player_bonus_achieved.append(false)
 
 	_score_calculators = [
 		calc_aces,
@@ -116,12 +126,14 @@ func confirm_category(category_index: int) -> void:
 
 	GameEvents.turn_ended.emit(current_player)
 
-	if _player_completed(0) and _player_completed(1):
+	if _all_players_completed():
 		game_over = true
-		var scores: Array[int] = [get_player_total(0), get_player_total(1)]
-		GameEvents.game_ended.emit(get_winner(), scores)
+		var scores: Array[int] = []
+		for p in player_count:
+			scores.append(get_player_total(p))
+		GameEvents.game_ended.emit(get_winners(), scores)
 	else:
-		current_player = 1 - current_player
+		current_player = (current_player + 1) % player_count
 		_begin_turn()
 
 	state_changed.emit()
@@ -172,14 +184,21 @@ func get_upper_bonus_remaining(player: int) -> int:
 	return max(UPPER_BONUS_THRESHOLD - get_upper_section_total(player), 0)
 
 
-func get_winner() -> int:
-	var total_p0 := get_player_total(0)
-	var total_p1 := get_player_total(1)
-	if total_p0 > total_p1:
-		return 0
-	if total_p1 > total_p0:
-		return 1
-	return -1
+func get_winners() -> Array[int]:
+	var totals: Array[int] = []
+	for p in player_count:
+		totals.append(get_player_total(p))
+
+	var best := totals[0]
+	for t in totals:
+		if t > best:
+			best = t
+
+	var winners: Array[int] = []
+	for p in player_count:
+		if totals[p] == best:
+			winners.append(p)
+	return winners
 
 
 func _begin_turn() -> void:
@@ -210,6 +229,13 @@ func _emit_dice_rolled() -> void:
 func _player_completed(player: int) -> bool:
 	for confirmed in player_score_confirmed[player]:
 		if not confirmed:
+			return false
+	return true
+
+
+func _all_players_completed() -> bool:
+	for p in player_count:
+		if not _player_completed(p):
 			return false
 	return true
 

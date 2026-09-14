@@ -1,5 +1,7 @@
 extends Node2D
 
+const DEBUG_PLAYER_COUNT := 2  # 0.5-2에서 제거 예정. 인원수 선택 UI가 생기면 여기 대신 그걸로 넘긴다.
+
 var game_state: GameState
 
 var locked_style := StyleBoxFlat.new()
@@ -35,7 +37,7 @@ func _ready() -> void:
 		label.mouse_filter = Control.MOUSE_FILTER_STOP
 		label.gui_input.connect(_on_dice_gui_input.bind(i))
 
-	game_state = GameState.new()
+	game_state = GameState.new(DEBUG_PLAYER_COUNT)
 	_build_scoreboard()
 	game_state.state_changed.connect(_on_state_changed)
 	game_state.start_turn()
@@ -168,17 +170,21 @@ func _refresh_game_over_ui() -> void:
 	for button in confirm_buttons:
 		button.disabled = true
 
-	var total_p1 := game_state.get_player_total(0)
-	var total_p2 := game_state.get_player_total(1)
-	var winner := game_state.get_winner()
-
+	var winners := game_state.get_winners()
 	var result_text: String
-	if winner == 0:
-		result_text = "플레이어 1 승리"
-	elif winner == 1:
-		result_text = "플레이어 2 승리"
-	else:
+	if winners.size() == 1:
+		result_text = "플레이어 %d 승리" % (winners[0] + 1)
+	elif winners.size() == game_state.player_count:
 		result_text = "무승부"
+	else:
+		var names: Array[String] = []
+		for w in winners:
+			names.append("플레이어 %d" % (w + 1))
+		result_text = "공동 우승: %s" % ", ".join(names)
 
-	game_over_label.text = "게임 종료! %s\n플레이어 1: %d점 / 플레이어 2: %d점" % [result_text, total_p1, total_p2]
+	var score_lines: Array[String] = []
+	for p in game_state.player_count:
+		score_lines.append("플레이어 %d: %d점" % [p + 1, game_state.get_player_total(p)])
+
+	game_over_label.text = "게임 종료! %s\n%s" % [result_text, " / ".join(score_lines)]
 	game_over_label.visible = true

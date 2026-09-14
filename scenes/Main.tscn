@@ -1,133 +1,133 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://cc6qbqtg3ok15"]
 
-[ext_resource type="Script" path="res://scenes/Main.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://bahupo0io1w3n" path="res://scenes/Main.gd" id="1_script"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Node2D" unique_id=1830447292]
 script = ExtResource("1_script")
 
-[node name="TurnLabel" type="Label" parent="."]
+[node name="TurnLabel" type="Label" parent="." unique_id=2142350831]
 offset_left = 226.0
 offset_top = 30.0
 offset_right = 926.0
 offset_bottom = 65.0
 theme_override_font_sizes/font_size = 28
+text = "현재 턴: 플레이어 1"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "현재 턴: 플레이어 1"
 
-[node name="Dice1" type="Label" parent="."]
+[node name="Dice1" type="Label" parent="." unique_id=884251689]
 offset_left = 336.0
 offset_top = 300.0
 offset_right = 416.0
 offset_bottom = 380.0
 theme_override_font_sizes/font_size = 48
+text = "3"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "3"
 
-[node name="Dice2" type="Label" parent="."]
+[node name="Dice2" type="Label" parent="." unique_id=1721681390]
 offset_left = 436.0
 offset_top = 300.0
 offset_right = 516.0
 offset_bottom = 380.0
 theme_override_font_sizes/font_size = 48
+text = "5"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "5"
 
-[node name="Dice3" type="Label" parent="."]
+[node name="Dice3" type="Label" parent="." unique_id=499273752]
 offset_left = 536.0
 offset_top = 300.0
 offset_right = 616.0
 offset_bottom = 380.0
 theme_override_font_sizes/font_size = 48
+text = "1"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "1"
 
-[node name="Dice4" type="Label" parent="."]
+[node name="Dice4" type="Label" parent="." unique_id=1773233204]
 offset_left = 636.0
 offset_top = 300.0
 offset_right = 716.0
 offset_bottom = 380.0
 theme_override_font_sizes/font_size = 48
+text = "6"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "6"
 
-[node name="Dice5" type="Label" parent="."]
+[node name="Dice5" type="Label" parent="." unique_id=946328822]
 offset_left = 736.0
 offset_top = 300.0
 offset_right = 816.0
 offset_bottom = 380.0
 theme_override_font_sizes/font_size = 48
+text = "2"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "2"
 
-[node name="RerollLabel" type="Label" parent="."]
+[node name="RerollLabel" type="Label" parent="." unique_id=1408522284]
 offset_left = 336.0
 offset_top = 385.0
 offset_right = 816.0
 offset_bottom = 415.0
 theme_override_font_sizes/font_size = 20
+text = "남은 리롤 횟수: 2"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "남은 리롤 횟수: 2"
 
-[node name="RollButton" type="Button" parent="."]
+[node name="RollButton" type="Button" parent="." unique_id=121755734]
 offset_left = 476.0
 offset_top = 420.0
 offset_right = 676.0
 offset_bottom = 470.0
 text = "주사위 굴리기"
 
-[node name="NewTurnButton" type="Button" parent="."]
+[node name="NewTurnButton" type="Button" parent="." unique_id=1670148073]
 offset_left = 476.0
 offset_top = 480.0
 offset_right = 676.0
 offset_bottom = 530.0
 text = "새 턴 시작"
 
-[node name="ScoreboardTitle" type="Label" parent="."]
+[node name="ScoreboardTitle" type="Label" parent="." unique_id=367795697]
 offset_left = 226.0
 offset_top = 555.0
 offset_right = 926.0
 offset_bottom = 585.0
 theme_override_font_sizes/font_size = 24
+text = "점수표"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "점수표"
 
-[node name="ScoreboardScroll" type="ScrollContainer" parent="."]
+[node name="ScoreboardScroll" type="ScrollContainer" parent="." unique_id=2086446185]
 offset_left = 226.0
 offset_top = 590.0
 offset_right = 926.0
 offset_bottom = 820.0
 
-[node name="ScoreList" type="VBoxContainer" parent="ScoreboardScroll"]
+[node name="ScoreList" type="VBoxContainer" parent="ScoreboardScroll" unique_id=805438652]
 custom_minimum_size = Vector2(690, 0)
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="TotalScoreLabel" type="Label" parent="."]
+[node name="TotalScoreLabel" type="Label" parent="." unique_id=671007126]
 offset_left = 226.0
 offset_top = 830.0
 offset_right = 926.0
 offset_bottom = 860.0
 theme_override_font_sizes/font_size = 24
+text = "합계: 0"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "합계: 0"
 
-[node name="GameOverLabel" type="Label" parent="."]
+[node name="GameOverLabel" type="Label" parent="." unique_id=1799486307]
 visible = false
 offset_left = 226.0
 offset_top = 865.0
 offset_right = 926.0
 offset_bottom = 900.0
-theme_override_font_sizes/font_size = 28
 theme_override_colors/font_color = Color(0.9, 0.2, 0.2, 1)
+theme_override_font_sizes/font_size = 28
+text = "게임 종료! 최종 합계: 0"
 horizontal_alignment = 1
 vertical_alignment = 1
-text = "게임 종료! 최종 합계: 0"

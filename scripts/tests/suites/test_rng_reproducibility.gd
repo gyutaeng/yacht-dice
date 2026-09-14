@@ -11,8 +11,8 @@ func run(r) -> void:
 	var rng_b := RandomNumberGenerator.new()
 	rng_b.seed = 12345
 
-	var state_a := GameStateScript.new(rng_a)
-	var state_b := GameStateScript.new(rng_b)
+	var state_a := GameStateScript.new(2, rng_a)
+	var state_b := GameStateScript.new(2, rng_b)
 
 	state_a.start_turn()
 	state_b.start_turn()
