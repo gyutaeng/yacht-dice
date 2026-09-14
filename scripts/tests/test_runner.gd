@@ -16,6 +16,7 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_rng_reproducibility.gd"),
 	preload("res://scripts/tests/suites/test_multiplayer.gd"),
 	preload("res://scripts/tests/suites/test_special_hands.gd"),
+	preload("res://scripts/tests/suites/test_voice_bank.gd"),
 ]
 
 

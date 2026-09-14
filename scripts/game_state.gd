@@ -121,7 +121,7 @@ func roll() -> void:
 
 func toggle_lock(index: int) -> void:
 	dice_locked[index] = not dice_locked[index]
-	GameEvents.die_held_changed.emit(index, dice_locked[index])
+	GameEvents.die_held_changed.emit(current_player, index, dice_locked[index])
 	state_changed.emit()
 
 
@@ -239,7 +239,7 @@ func _roll_unlocked_dice() -> void:
 
 
 func _emit_dice_rolled() -> void:
-	GameEvents.dice_rolled.emit(dice_results.duplicate(), rolls_left)
+	GameEvents.dice_rolled.emit(current_player, dice_results.duplicate(), rolls_left)
 	_emit_special_hand_if_any()
 	for i in CATEGORY_NAMES.size():
 		if not player_score_confirmed[current_player][i]:

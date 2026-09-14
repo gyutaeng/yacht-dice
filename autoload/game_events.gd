@@ -6,8 +6,8 @@ extends Node
 # Node를 상속하는 이유는 autoload 등록 요건 때문일 뿐, 씬 트리 기능은 쓰지 않는다.
 
 signal turn_started(player_index: int)
-signal dice_rolled(values: Array[int], reroll_left: int)
-signal die_held_changed(index: int, held: bool)
+signal dice_rolled(player_index: int, values: Array[int], reroll_left: int)
+signal die_held_changed(player_index: int, index: int, held: bool)
 signal score_previewed(category: int, points: int)
 signal score_committed(player_index: int, category: int, points: int)
 signal yacht_scored(player_index: int)

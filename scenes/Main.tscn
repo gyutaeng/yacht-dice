@@ -265,6 +265,7 @@ ok_button_text = "그만두기"
 cancel_button_text = "취소"
 
 [node name="SpecialHandSfxPlayer" type="AudioStreamPlayer" parent="."]
+volume_db = -6.0
 
 [node name="DebugHotkeys" type="Node" parent="."]
 script = ExtResource("2_script")

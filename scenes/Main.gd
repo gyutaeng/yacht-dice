@@ -203,6 +203,7 @@ func _return_to_title() -> void:
 	_reset_portrait_transition_state()
 	game_state = null
 	debug_hotkeys.game_state = null
+	VoiceBank.configure([])
 
 	game_screen.visible = false
 	game_over_overlay.visible = false
@@ -243,6 +244,7 @@ func _start_new_game(player_count: int) -> void:
 	debug_hotkeys.game_state = game_state
 
 	_assign_player_characters(player_count)  # TODO(1-6): 캐릭터 선택 UI가 생기면 이 임시 배정을 제거한다.
+	VoiceBank.configure(player_character_assignments)
 	_build_character_area()
 	_build_scoreboard()
 

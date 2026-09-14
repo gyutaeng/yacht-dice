@@ -20,6 +20,7 @@ config/icon="res://icon.svg"
 GameEvents="*res://autoload/game_events.gd"
 CharacterLibrary="*res://autoload/character_library.gd"
 AssetLoader="*res://autoload/asset_loader.gd"
+VoiceBank="*res://autoload/voice_bank.gd"
 
 [display]
 
