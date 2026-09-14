@@ -3,7 +3,7 @@ extends RefCounted
 
 signal state_changed
 
-const MAX_REROLLS := 2
+const MAX_ROLLS_PER_TURN := 3
 const MIN_PLAYER_COUNT := 2
 const MAX_PLAYER_COUNT := 4
 const DEFAULT_PLAYER_COUNT := 2
@@ -33,7 +33,7 @@ const CATEGORY_NAMES: Array[String] = [
 
 var dice_results: Array[int] = [1, 1, 1, 1, 1]
 var dice_locked: Array[bool] = [false, false, false, false, false]
-var rerolls_left: int = MAX_REROLLS
+var rolls_left: int = MAX_ROLLS_PER_TURN
 var current_player: int = 0
 var game_over: bool = false
 var player_count: int = DEFAULT_PLAYER_COUNT
@@ -91,11 +91,11 @@ func start_turn() -> void:
 
 
 func roll() -> void:
-	if rerolls_left <= 0:
+	if rolls_left <= 0:
 		return
 
 	_roll_unlocked_dice()
-	rerolls_left -= 1
+	rolls_left -= 1
 	_emit_dice_rolled()
 	state_changed.emit()
 
@@ -204,11 +204,10 @@ func get_winners() -> Array[int]:
 func _begin_turn() -> void:
 	GameEvents.turn_started.emit(current_player)
 
-	rerolls_left = MAX_REROLLS
+	rolls_left = MAX_ROLLS_PER_TURN
+	has_rolled = false
 	for i in dice_locked.size():
 		dice_locked[i] = false
-	_roll_unlocked_dice()
-	_emit_dice_rolled()
 
 
 func _roll_unlocked_dice() -> void:
@@ -220,7 +219,7 @@ func _roll_unlocked_dice() -> void:
 
 
 func _emit_dice_rolled() -> void:
-	GameEvents.dice_rolled.emit(dice_results.duplicate(), rerolls_left)
+	GameEvents.dice_rolled.emit(dice_results.duplicate(), rolls_left)
 	for i in CATEGORY_NAMES.size():
 		if not player_score_confirmed[current_player][i]:
 			GameEvents.score_previewed.emit(i, preview_score(i))

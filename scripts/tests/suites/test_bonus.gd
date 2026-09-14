@@ -35,6 +35,7 @@ func run(r) -> void:
 	gs2.player_confirmed_scores[0] = [3, 6, 9, 12, 15, 0, 0, 0, 0, 0, 0, 0]  # Sixes 빼고 45
 	for i in 5:
 		gs2.player_score_confirmed[0][i] = true
+	gs2.roll()  # has_rolled를 켠다(값 자체는 바로 아래서 원하는 값으로 덮어씀)
 	gs2.dice_results = [6, 6, 6, 1, 1]
 	gs2.confirm_category(5)  # Sixes 확정 -> 45+18=63, 이 순간 보너스 달성
 
@@ -46,6 +47,7 @@ func run(r) -> void:
 		while p1_category < GameStateScript.CATEGORY_NAMES.size() and gs2.player_score_confirmed[1][p1_category]:
 			p1_category += 1
 		if p1_category < GameStateScript.CATEGORY_NAMES.size():
+			gs2.roll()
 			gs2.confirm_category(p1_category)  # player 1 턴 하나 흘려보내기
 
 	if gs2.current_player == 0 and not gs2.game_over:
@@ -53,6 +55,7 @@ func run(r) -> void:
 		while p0_category < GameStateScript.CATEGORY_NAMES.size() and gs2.player_score_confirmed[0][p0_category]:
 			p0_category += 1
 		if p0_category < GameStateScript.CATEGORY_NAMES.size():
+			gs2.roll()
 			gs2.confirm_category(p0_category)  # 다시 player 0 턴에서 한 번 더 확정
 
 	r.expect_eq("이미 달성한 보너스는 재emit되지 않음", emit_count[0], 1)

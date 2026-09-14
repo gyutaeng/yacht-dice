@@ -126,6 +126,7 @@ func duplicate_profile(id: String) -> CharacterProfile:
 	new_profile.id = new_id
 	new_profile.display_name = source_profile.display_name
 	new_profile.portrait_file = source_profile.portrait_file
+	new_profile.thumbnail_file = source_profile.thumbnail_file
 	new_profile.voice_map = source_profile.voice_map.duplicate(true)
 	new_profile.volume_db = source_profile.volume_db
 

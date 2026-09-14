@@ -50,6 +50,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _auto_confirm_one() -> void:
+	_ensure_rolled()
 	var category := _find_open_category()
 	if category != -1:
 		game_state.confirm_category(category)
@@ -57,10 +58,16 @@ func _auto_confirm_one() -> void:
 
 func _auto_finish_game() -> void:
 	while not game_state.game_over:
+		_ensure_rolled()
 		var category := _find_open_category()
 		if category == -1:
 			break
 		game_state.confirm_category(category)
+
+
+func _ensure_rolled() -> void:
+	if not game_state.has_rolled:
+		game_state.roll()
 
 
 func _find_open_category() -> int:

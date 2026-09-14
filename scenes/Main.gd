@@ -251,6 +251,8 @@ func _clear_dynamic_nodes() -> void:
 
 
 func _on_dice_gui_input(event: InputEvent, index: int) -> void:
+	if not game_state.has_rolled:
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		game_state.toggle_lock(index)
 
@@ -286,11 +288,17 @@ func _assign_player_characters(player_count: int) -> void:
 		player_character_assignments.append(selectable[p % selectable.size()])
 
 
-func _load_portrait_texture(profile: CharacterProfile) -> Texture2D:
-	if profile == null or profile.portrait_file.is_empty():
+func _load_character_file_texture(profile: CharacterProfile, filename: String) -> Texture2D:
+	if profile == null or filename.is_empty():
 		return null
 	var base_dir := CharacterLibrary.BUILTIN_FALLBACK_PATH if profile.is_builtin else CharacterLibrary.CHARACTERS_DIR.path_join(profile.id)
-	return AssetLoader.load_texture_from_path(base_dir.path_join(profile.portrait_file))
+	return AssetLoader.load_texture_from_path(base_dir.path_join(filename))
+
+
+func _load_portrait_texture(profile: CharacterProfile) -> Texture2D:
+	if profile == null:
+		return null
+	return _load_character_file_texture(profile, profile.portrait_file)
 
 
 # 초상화가 없거나(portrait_file 비어 있음) 로딩에 실패하면 실루엣 플레이스홀더로
@@ -300,12 +308,31 @@ func _resolve_display_texture(profile: CharacterProfile) -> Texture2D:
 	return texture if texture != null else _placeholder_texture
 
 
+# 작은 초상(이름표 썸네일)에 쓸 텍스처를 고른다. thumbnail_file이 있고 로딩에
+# 성공하면 그것을, 아니면 큰 초상/실루엣 폴백(_resolve_display_texture)을 쓴다.
+func _resolve_thumbnail_texture(profile: CharacterProfile) -> Texture2D:
+	if profile != null:
+		var dedicated := _load_character_file_texture(profile, profile.thumbnail_file)
+		if dedicated != null:
+			return dedicated
+	return _resolve_display_texture(profile)
+
+
+# 작은 초상에 전용 thumbnail_file 이미지를 쓰는 경우에만 true(가운데 기준 크롭).
+# portrait_file로 폴백한 경우나 실루엣인 경우는 false(위쪽 기준 크롭 — 전신
+# 일러스트를 정사각형에 채울 때 얼굴이 있을 위쪽을 기준으로 잘라낸다).
+func _thumbnail_should_center_crop(profile: CharacterProfile) -> bool:
+	if profile == null:
+		return false
+	return _load_character_file_texture(profile, profile.thumbnail_file) != null
+
+
 # container_size 안에 texture를 비율 유지한 채 배치한다.
 # cover=false: 컨테이너 안에 다 들어오게 축소(contain). cover=true: 컨테이너를
 # 꽉 채우고 넘치는 쪽은 잘라낸다(cover).
-# align_bottom=true: 세로로 아래쪽 기준(발이 바닥에). false: 위쪽 기준(얼굴 쪽).
+# vertical_anchor: 세로 정렬 기준. 0.0=위쪽(얼굴 쪽), 0.5=가운데, 1.0=아래쪽(발이 바닥에).
 # 가로 방향은 항상 가운데 정렬한다.
-func _fit_texture(rect: TextureRect, texture: Texture2D, container_size: Vector2, cover: bool, align_bottom: bool) -> void:
+func _fit_texture(rect: TextureRect, texture: Texture2D, container_size: Vector2, cover: bool, vertical_anchor: float) -> void:
 	rect.texture = texture
 	rect.stretch_mode = TextureRect.STRETCH_SCALE
 
@@ -326,7 +353,7 @@ func _fit_texture(rect: TextureRect, texture: Texture2D, container_size: Vector2
 	rect.size = display_size
 	rect.position = Vector2(
 		(container_size.x - display_size.x) / 2.0,
-		(container_size.y - display_size.y) if align_bottom else 0.0
+		(container_size.y - display_size.y) * vertical_anchor
 	)
 
 
@@ -338,7 +365,7 @@ func _on_portrait_stack_resized() -> void:
 func _refit_portrait_rect(rect: TextureRect) -> void:
 	if rect.texture == null:
 		return
-	_fit_texture(rect, rect.texture, portrait_stack.size, false, true)
+	_fit_texture(rect, rect.texture, portrait_stack.size, false, 1.0)
 
 
 func _transition_portrait(profile: CharacterProfile, label_text: String) -> void:
@@ -351,7 +378,7 @@ func _transition_portrait(profile: CharacterProfile, label_text: String) -> void
 	var back_rect := portrait_texture_b if _portrait_front_is_a else portrait_texture_a
 	_portrait_front_is_a = not _portrait_front_is_a
 
-	_fit_texture(back_rect, _resolve_display_texture(profile), portrait_stack.size, false, true)
+	_fit_texture(back_rect, _resolve_display_texture(profile), portrait_stack.size, false, 1.0)
 	back_rect.modulate.a = 0.0
 
 	_portrait_tween = create_tween()
@@ -385,8 +412,10 @@ func _build_character_area() -> void:
 		var thumb := TextureRect.new()
 		thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		thumb_clip.add_child(thumb)
-		# 세로로 긴 일러스트를 정사각형에 채울 때 얼굴이 있을 위쪽을 기준으로 잘라낸다.
-		_fit_texture(thumb, _resolve_display_texture(profile), Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE), true, false)
+		# 전용 thumbnail_file이 있으면 가운데 기준으로, portrait_file/실루엣 폴백이면
+		# 세로로 긴 일러스트일 수 있으니 얼굴이 있을 위쪽 기준으로 잘라낸다.
+		var thumb_anchor := 0.5 if _thumbnail_should_center_crop(profile) else 0.0
+		_fit_texture(thumb, _resolve_thumbnail_texture(profile), Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE), true, thumb_anchor)
 
 		var name_label := Label.new()
 		name_label.text = "P%d %s" % [p + 1, shown_name]
@@ -488,7 +517,7 @@ func _on_state_changed() -> void:
 
 func _refresh_dice_ui() -> void:
 	for i in dice_labels.size():
-		dice_labels[i].text = str(game_state.dice_results[i])
+		dice_labels[i].text = str(game_state.dice_results[i]) if game_state.has_rolled else "?"
 		if game_state.dice_locked[i]:
 			dice_labels[i].add_theme_stylebox_override("normal", locked_style)
 		else:
@@ -496,8 +525,8 @@ func _refresh_dice_ui() -> void:
 
 
 func _refresh_reroll_ui() -> void:
-	reroll_label.text = "남은 리롤 횟수: %d" % game_state.rerolls_left
-	roll_button.disabled = game_state.rerolls_left <= 0
+	reroll_label.text = "남은 굴리기: %d" % game_state.rolls_left
+	roll_button.disabled = game_state.rolls_left <= 0
 
 
 func _refresh_turn_ui() -> void:
@@ -539,7 +568,7 @@ func _refresh_scoreboard_ui() -> void:
 				label.add_theme_font_override("font", bold_font)
 				label.visible = true
 				button.visible = false
-			elif p == current:
+			elif p == current and game_state.has_rolled:
 				button.text = str(game_state.preview_score(i))
 				label.visible = false
 				button.visible = true
@@ -572,7 +601,7 @@ func _refresh_scoreboard_ui() -> void:
 
 
 func _refresh_confirm_score_button() -> void:
-	if selected_category == -1 or game_state.game_over:
+	if selected_category == -1 or game_state.game_over or not game_state.has_rolled:
 		confirm_score_button.disabled = true
 		confirm_score_button.text = "점수 확정"
 		return

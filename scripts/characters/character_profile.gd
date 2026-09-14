@@ -12,6 +12,9 @@ const FORMAT_VERSION := 1
 @export var display_name: String = ""
 # 프로필 폴더 기준 상대경로. 예: "portrait.png"
 @export var portrait_file: String = ""
+# 작은 초상(이름표 썸네일) 전용 이미지. 선택 항목 — 없으면 UI가 portrait_file로
+# 폴백한다. 프로필 폴더 기준 상대경로.
+@export var thumbnail_file: String = ""
 # 이벤트 키(GameEvents.Common/Yacht 등의 값, 예: "yacht.yacht") -> 파일명 배열.
 # 파일명은 voices/ 기준이 아니라 **프로필 폴더 기준** 상대경로로 통일한다.
 # 즉 voices/ 안의 파일이라도 "laugh1.wav"가 아니라 "voices/laugh1.wav"라고 적는다.
@@ -33,6 +36,7 @@ func to_dict() -> Dictionary:
 		"id": id,
 		"display_name": display_name,
 		"portrait_file": portrait_file,
+		"thumbnail_file": thumbnail_file,
 		"voice_map": voice_map,
 		"volume_db": volume_db,
 	}
@@ -76,10 +80,16 @@ static func from_dict(data: Dictionary, context: String = "") -> CharacterProfil
 	var portrait_value = data.get("portrait_file", "")
 	var portrait_str: String = portrait_value if portrait_value is String else ""
 
+	# 선택 항목이라 없어도 스키마 위반이 아니다 — 기존(이 필드가 생기기 전) 캐릭터도
+	# 그대로 동작해야 하므로 빈 문자열로 기본 처리한다.
+	var thumbnail_value = data.get("thumbnail_file", "")
+	var thumbnail_str: String = thumbnail_value if thumbnail_value is String else ""
+
 	var profile := CharacterProfile.new()
 	profile.id = id_str
 	profile.display_name = display_name_value
 	profile.portrait_file = portrait_str
+	profile.thumbnail_file = thumbnail_str
 	profile.volume_db = float(volume_value)
 	profile.voice_map = _sanitize_voice_map(voice_map_value)
 	return profile

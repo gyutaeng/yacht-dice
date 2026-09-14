@@ -24,6 +24,7 @@ func _test_turn_cycle(r, player_count: int) -> void:
 	var sequence: Array[int] = []
 	for k in player_count * 2:
 		sequence.append(gs.current_player)
+		gs.roll()  # 이제 확정 전에 실제로 굴려야 has_rolled 가드를 통과한다
 		gs.confirm_category(k)  # k < 2*player_count <= 8, 12개 항목 안에서 전부 서로 다른 칸
 
 	var expected: Array[int] = []
@@ -41,6 +42,7 @@ func _test_single_player_completion_does_not_end_game(r) -> void:
 	for i in range(GameStateScript.CATEGORY_NAMES.size() - 1):
 		gs.player_score_confirmed[0][i] = true
 		gs.player_confirmed_scores[0][i] = 1
+	gs.roll()
 	gs.confirm_category(GameStateScript.CATEGORY_NAMES.size() - 1)
 
 	r.expect_eq("4인: player0만 12칸을 다 채워도 game_over는 false", gs.game_over, false)
@@ -58,6 +60,7 @@ func _test_game_ended_only_when_all_complete(r) -> void:
 	# player0만 완주 (아직 player1은 미확정) -> game_ended가 아직 emit되면 안 된다.
 	for i in range(GameStateScript.CATEGORY_NAMES.size() - 1):
 		gs.player_score_confirmed[0][i] = true
+	gs.roll()
 	gs.confirm_category(GameStateScript.CATEGORY_NAMES.size() - 1)
 
 	r.expect_eq("player0만 완주: game_ended emit 횟수", emit_count[0], 0)
@@ -67,6 +70,7 @@ func _test_game_ended_only_when_all_complete(r) -> void:
 	# 이제 player1도 마저 완주시킨다 -> 그 순간에만 game_ended가 emit되어야 한다.
 	for i in range(GameStateScript.CATEGORY_NAMES.size() - 1):
 		gs.player_score_confirmed[1][i] = true
+	gs.roll()
 	gs.confirm_category(GameStateScript.CATEGORY_NAMES.size() - 1)
 
 	r.expect_eq("둘 다 완주: game_ended emit 횟수", emit_count[0], 1)
