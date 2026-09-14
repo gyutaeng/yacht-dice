@@ -6,6 +6,8 @@ var locked_style := StyleBoxFlat.new()
 
 var score_labels: Array[Label] = []
 var confirm_buttons: Array[Button] = []
+var upper_bonus_label: Label
+var bonus_label: Label
 
 @onready var dice_labels: Array[Label] = [$Dice1, $Dice2, $Dice3, $Dice4, $Dice5]
 @onready var roll_button: Button = $RollButton
@@ -77,6 +79,18 @@ func _build_scoreboard() -> void:
 
 		score_list.add_child(row)
 
+	var upper_bonus_row := HBoxContainer.new()
+	upper_bonus_label = Label.new()
+	upper_bonus_label.custom_minimum_size = Vector2(660, 0)
+	upper_bonus_row.add_child(upper_bonus_label)
+	score_list.add_child(upper_bonus_row)
+
+	var bonus_row := HBoxContainer.new()
+	bonus_label = Label.new()
+	bonus_label.custom_minimum_size = Vector2(660, 0)
+	bonus_row.add_child(bonus_label)
+	score_list.add_child(bonus_row)
+
 
 func _on_confirm_pressed(index: int) -> void:
 	game_state.confirm_category(index)
@@ -87,6 +101,7 @@ func _on_state_changed() -> void:
 	_refresh_reroll_ui()
 	_refresh_turn_ui()
 	_refresh_scoreboard_ui()
+	_refresh_bonus_ui()
 	_refresh_total_ui()
 	_refresh_game_over_ui()
 
@@ -118,6 +133,25 @@ func _refresh_scoreboard_ui() -> void:
 		else:
 			score_labels[i].text = str(game_state.preview_score(i))
 			confirm_buttons[i].disabled = false
+
+
+func _refresh_bonus_ui() -> void:
+	var player := game_state.current_player
+	var upper_total := game_state.get_upper_section_total(player)
+	var threshold := GameState.UPPER_BONUS_THRESHOLD
+	var achieved := game_state.has_upper_bonus(player)
+
+	if achieved:
+		upper_bonus_label.text = "상단 합계 (현재 %d / %d) — 보너스 달성!" % [upper_total, threshold]
+	else:
+		var remaining := game_state.get_upper_bonus_remaining(player)
+		upper_bonus_label.text = "상단 합계 (현재 %d / %d, %d점 남음)" % [upper_total, threshold, remaining]
+
+	bonus_label.text = "보너스 +%d" % GameState.UPPER_BONUS_POINTS
+	if achieved:
+		bonus_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	else:
+		bonus_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 
 
 func _refresh_total_ui() -> void:

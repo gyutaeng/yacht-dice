@@ -9,6 +9,11 @@ const NUM_PLAYERS := 2
 # CATEGORY_NAMES에서 "Yacht"의 인덱스. yacht_scored 이벤트 판정에 쓴다.
 const YACHT_CATEGORY_INDEX := 11
 
+# 상단 섹션(Aces~Sixes) 보너스 규칙. 나중에 조정 가능하도록 상수로 뺐다.
+const UPPER_BONUS_THRESHOLD := 63
+const UPPER_BONUS_POINTS := 35
+const UPPER_SECTION_SIZE := 6
+
 const CATEGORY_NAMES: Array[String] = [
 	"Aces",
 	"Deuces",
@@ -33,6 +38,7 @@ var game_over: bool = false
 # player_score_confirmed[player][category] / player_confirmed_scores[player][category]
 var player_score_confirmed: Array = []
 var player_confirmed_scores: Array = []
+var player_bonus_achieved: Array[bool] = [false, false]
 
 var _rng: RandomNumberGenerator
 var _score_calculators: Array[Callable] = []
@@ -98,6 +104,11 @@ func confirm_category(category_index: int) -> void:
 		GameEvents.zero_scored.emit(current_player, category_index)
 	if category_index == YACHT_CATEGORY_INDEX and value == 50:
 		GameEvents.yacht_scored.emit(current_player)
+
+	if not player_bonus_achieved[current_player] and has_upper_bonus(current_player):
+		player_bonus_achieved[current_player] = true
+		GameEvents.bonus_achieved.emit(current_player)
+
 	GameEvents.turn_ended.emit(current_player)
 
 	if _player_completed(0) and _player_completed(1):
@@ -131,7 +142,27 @@ func get_player_total(player: int) -> int:
 	var total := 0
 	for score in player_confirmed_scores[player]:
 		total += score
+	total += get_upper_bonus_points(player)
 	return total
+
+
+func get_upper_section_total(player: int) -> int:
+	var total := 0
+	for i in UPPER_SECTION_SIZE:
+		total += player_confirmed_scores[player][i]
+	return total
+
+
+func has_upper_bonus(player: int) -> bool:
+	return get_upper_section_total(player) >= UPPER_BONUS_THRESHOLD
+
+
+func get_upper_bonus_points(player: int) -> int:
+	return UPPER_BONUS_POINTS if has_upper_bonus(player) else 0
+
+
+func get_upper_bonus_remaining(player: int) -> int:
+	return max(UPPER_BONUS_THRESHOLD - get_upper_section_total(player), 0)
 
 
 func get_winner() -> int:
