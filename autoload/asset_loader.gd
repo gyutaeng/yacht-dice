@@ -17,8 +17,8 @@ extends Node
 #   파일 내용의 매직 바이트가 주장하는 확장자와 실제로 일치하는지 추가로 검사한다.
 #   둘 중 어느 쪽이 안 맞는지 경고 로그에 남긴다.
 
-const MAX_IMAGE_BYTES := 5 * 1024 * 1024  # 5MB
-const MAX_AUDIO_BYTES := 10 * 1024 * 1024  # 10MB
+const MAX_IMAGE_BYTES := 8 * 1024 * 1024  # 8MB
+const MAX_AUDIO_BYTES := 2 * 1024 * 1024  # 2MB (파일 1개당)
 const ALLOWED_IMAGE_EXTENSIONS := ["png", "jpg", "jpeg", "webp"]
 const ALLOWED_AUDIO_EXTENSIONS := ["wav", "ogg", "mp3"]
 
@@ -113,6 +113,17 @@ func load_audio_from_path(path: String, max_bytes: int = MAX_AUDIO_BYTES) -> Aud
 	if bytes.is_empty():
 		return null
 	return load_audio_from_bytes(bytes)
+
+
+## 검증(확장자+크기+시그니처)만 통과시키고 디코딩은 하지 않은 원본 바이트를 돌려준다.
+## 디코딩 결과가 아니라 원본 바이트 자체가 필요할 때 쓴다(예: 프로필 폴더 안에
+## 파일을 그대로 복사해 넣는 경우). 검증에 실패하면 빈 배열을 반환한다.
+func read_validated_image_bytes(path: String, max_bytes: int = MAX_IMAGE_BYTES) -> PackedByteArray:
+	return _read_file_bytes(path, ALLOWED_IMAGE_EXTENSIONS, max_bytes)
+
+
+func read_validated_audio_bytes(path: String, max_bytes: int = MAX_AUDIO_BYTES) -> PackedByteArray:
+	return _read_file_bytes(path, ALLOWED_AUDIO_EXTENSIONS, max_bytes)
 
 
 func _read_file_bytes(path: String, allowed_extensions: Array, max_bytes: int) -> PackedByteArray:

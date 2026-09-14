@@ -1,6 +1,9 @@
 extends Control
 
 const ROW_HEIGHT := 26.0
+const SMALL_TAG_SIZE := 56.0
+const PORTRAIT_FADE_DURATION := 0.3
+const PLACEHOLDER_PORTRAIT_PATH := "res://assets/placeholder_portrait.png"
 
 var game_state: GameState
 
@@ -25,6 +28,16 @@ var total_labels: Array[Label] = []
 var player_columns: Array[PanelContainer] = []
 var small_tag_rows: Array[Control] = []
 
+# player_character_assignments[player] -> CharacterProfile.
+var player_character_assignments: Array[CharacterProfile] = []
+
+# 큰 슬롯 크로스페이드 상태.
+var _portrait_front_is_a: bool = true
+var _current_portrait_player: int = -1
+var _portrait_tween: Tween
+var _label_tween: Tween
+var _placeholder_texture: Texture2D
+
 @onready var start_screen: Control = $StartScreen
 @onready var game_screen: Control = $GameScreen
 @onready var players_2_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players2Button
@@ -33,6 +46,9 @@ var small_tag_rows: Array[Control] = []
 
 @onready var turn_label: Label = $GameScreen/Margin/MainHBox/RightColumn/TurnLabel
 @onready var big_portrait_area: PanelContainer = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea
+@onready var portrait_stack: Control = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack
+@onready var portrait_texture_a: TextureRect = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack/PortraitTextureA
+@onready var portrait_texture_b: TextureRect = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack/PortraitTextureB
 @onready var big_name_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigNameLabel
 @onready var small_tags_row: HBoxContainer = $GameScreen/Margin/MainHBox/LeftColumn/SmallTagsRow
 
@@ -125,6 +141,14 @@ func _ready() -> void:
 
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
+	_placeholder_texture = load(PLACEHOLDER_PORTRAIT_PATH)
+	portrait_texture_a.modulate.a = 1.0
+	portrait_texture_b.modulate.a = 0.0
+	# 처음 전환이 걸리는 시점엔 방금 보이게 된 GameScreen의 레이아웃이 아직
+	# 계산 전이라 portrait_stack.size가 (0,0)일 수 있다. 그래서 크기가 실제로
+	# 잡힐 때(그리고 창 크기가 바뀔 때도) 현재 텍스처를 다시 맞춘다.
+	portrait_stack.resized.connect(_on_portrait_stack_resized)
+
 	players_2_button.pressed.connect(_on_start_pressed.bind(2))
 	players_3_button.pressed.connect(_on_start_pressed.bind(3))
 	players_4_button.pressed.connect(_on_start_pressed.bind(4))
@@ -162,12 +186,28 @@ func _on_to_title_pressed() -> void:
 
 func _return_to_title() -> void:
 	_clear_dynamic_nodes()
+	_reset_portrait_transition_state()
 	game_state = null
 	debug_hotkeys.game_state = null
 
 	game_screen.visible = false
 	game_over_overlay.visible = false
 	start_screen.visible = true
+
+
+func _reset_portrait_transition_state() -> void:
+	if _portrait_tween != null and _portrait_tween.is_valid():
+		_portrait_tween.kill()
+	if _label_tween != null and _label_tween.is_valid():
+		_label_tween.kill()
+
+	_current_portrait_player = -1
+	portrait_texture_a.texture = null
+	portrait_texture_b.texture = null
+	portrait_texture_a.modulate.a = 1.0
+	portrait_texture_b.modulate.a = 0.0
+	_portrait_front_is_a = true
+	big_name_label.modulate.a = 1.0
 
 
 func _start_new_game(player_count: int) -> void:
@@ -178,10 +218,12 @@ func _start_new_game(player_count: int) -> void:
 	game_screen.visible = true
 	roll_button.disabled = false
 	selected_category = -1
+	_reset_portrait_transition_state()
 
 	game_state = GameState.new(player_count)
 	debug_hotkeys.game_state = game_state
 
+	_assign_player_characters(player_count)  # TODO(1-6): 캐릭터 선택 UI가 생기면 이 임시 배정을 제거한다.
 	_build_character_area()
 	_build_scoreboard()
 
@@ -205,6 +247,7 @@ func _clear_dynamic_nodes() -> void:
 	total_labels.clear()
 	player_columns.clear()
 	small_tag_rows.clear()
+	player_character_assignments.clear()
 
 
 func _on_dice_gui_input(event: InputEvent, index: int) -> void:
@@ -231,18 +274,122 @@ func _on_confirm_score_pressed() -> void:
 	game_state.confirm_category(category)
 
 
+# TODO(1-6): 캐릭터 선택 UI가 생기면 이 함수는 통째로 지우고, 플레이어가 직접
+# 고른 프로필을 쓰도록 바꾼다. 지금은 아직 선택 UI가 없어서, 고를 수 있는
+# 프로필(내장 기본 + 사용자 캐릭터)을 순서대로 돌려가며 임시로 배정한다.
+func _assign_player_characters(player_count: int) -> void:
+	var selectable := CharacterLibrary.get_selectable_profiles()
+	player_character_assignments.clear()
+	if selectable.is_empty():
+		return
+	for p in player_count:
+		player_character_assignments.append(selectable[p % selectable.size()])
+
+
+func _load_portrait_texture(profile: CharacterProfile) -> Texture2D:
+	if profile == null or profile.portrait_file.is_empty():
+		return null
+	var base_dir := CharacterLibrary.BUILTIN_FALLBACK_PATH if profile.is_builtin else CharacterLibrary.CHARACTERS_DIR.path_join(profile.id)
+	return AssetLoader.load_texture_from_path(base_dir.path_join(profile.portrait_file))
+
+
+# 초상화가 없거나(portrait_file 비어 있음) 로딩에 실패하면 실루엣 플레이스홀더로
+# 대체한다. 어떤 경우에도 빈 화면이 나오면 안 된다.
+func _resolve_display_texture(profile: CharacterProfile) -> Texture2D:
+	var texture := _load_portrait_texture(profile)
+	return texture if texture != null else _placeholder_texture
+
+
+# container_size 안에 texture를 비율 유지한 채 배치한다.
+# cover=false: 컨테이너 안에 다 들어오게 축소(contain). cover=true: 컨테이너를
+# 꽉 채우고 넘치는 쪽은 잘라낸다(cover).
+# align_bottom=true: 세로로 아래쪽 기준(발이 바닥에). false: 위쪽 기준(얼굴 쪽).
+# 가로 방향은 항상 가운데 정렬한다.
+func _fit_texture(rect: TextureRect, texture: Texture2D, container_size: Vector2, cover: bool, align_bottom: bool) -> void:
+	rect.texture = texture
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+
+	if texture == null or container_size.x <= 0 or container_size.y <= 0:
+		return
+
+	var tex_size := texture.get_size()
+	if tex_size.x <= 0 or tex_size.y <= 0:
+		return
+
+	var scale: float
+	if cover:
+		scale = max(container_size.x / tex_size.x, container_size.y / tex_size.y)
+	else:
+		scale = min(container_size.x / tex_size.x, container_size.y / tex_size.y)
+
+	var display_size := tex_size * scale
+	rect.size = display_size
+	rect.position = Vector2(
+		(container_size.x - display_size.x) / 2.0,
+		(container_size.y - display_size.y) if align_bottom else 0.0
+	)
+
+
+func _on_portrait_stack_resized() -> void:
+	_refit_portrait_rect(portrait_texture_a)
+	_refit_portrait_rect(portrait_texture_b)
+
+
+func _refit_portrait_rect(rect: TextureRect) -> void:
+	if rect.texture == null:
+		return
+	_fit_texture(rect, rect.texture, portrait_stack.size, false, true)
+
+
+func _transition_portrait(profile: CharacterProfile, label_text: String) -> void:
+	if _portrait_tween != null and _portrait_tween.is_valid():
+		_portrait_tween.kill()
+	if _label_tween != null and _label_tween.is_valid():
+		_label_tween.kill()
+
+	var front_rect := portrait_texture_a if _portrait_front_is_a else portrait_texture_b
+	var back_rect := portrait_texture_b if _portrait_front_is_a else portrait_texture_a
+	_portrait_front_is_a = not _portrait_front_is_a
+
+	_fit_texture(back_rect, _resolve_display_texture(profile), portrait_stack.size, false, true)
+	back_rect.modulate.a = 0.0
+
+	_portrait_tween = create_tween()
+	_portrait_tween.set_parallel(true)
+	_portrait_tween.set_trans(Tween.TRANS_SINE)
+	_portrait_tween.set_ease(Tween.EASE_IN_OUT)
+	_portrait_tween.tween_property(front_rect, "modulate:a", 0.0, PORTRAIT_FADE_DURATION)
+	_portrait_tween.tween_property(back_rect, "modulate:a", 1.0, PORTRAIT_FADE_DURATION)
+
+	_label_tween = create_tween()
+	_label_tween.set_trans(Tween.TRANS_SINE)
+	_label_tween.set_ease(Tween.EASE_IN_OUT)
+	_label_tween.tween_property(big_name_label, "modulate:a", 0.0, PORTRAIT_FADE_DURATION / 2.0)
+	_label_tween.tween_callback(func() -> void: big_name_label.text = label_text)
+	_label_tween.tween_property(big_name_label, "modulate:a", 1.0, PORTRAIT_FADE_DURATION / 2.0)
+
+
 func _build_character_area() -> void:
 	for p in game_state.player_count:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
 
-		var tag := ColorRect.new()
-		tag.custom_minimum_size = Vector2(24, 24)
-		tag.color = Color(0.4, 0.4, 0.45, 1)
-		row.add_child(tag)
+		var profile: CharacterProfile = player_character_assignments[p] if p < player_character_assignments.size() else null
+		var shown_name := profile.display_name if profile != null else "플레이어 %d" % (p + 1)
+
+		var thumb_clip := Control.new()
+		thumb_clip.custom_minimum_size = Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE)
+		thumb_clip.clip_contents = true
+		row.add_child(thumb_clip)
+
+		var thumb := TextureRect.new()
+		thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		thumb_clip.add_child(thumb)
+		# 세로로 긴 일러스트를 정사각형에 채울 때 얼굴이 있을 위쪽을 기준으로 잘라낸다.
+		_fit_texture(thumb, _resolve_display_texture(profile), Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE), true, false)
 
 		var name_label := Label.new()
-		name_label.text = "플레이어 %d" % (p + 1)
+		name_label.text = "P%d %s" % [p + 1, shown_name]
 		name_label.add_theme_font_size_override("font_size", 13)
 		row.add_child(name_label)
 
@@ -358,9 +505,19 @@ func _refresh_turn_ui() -> void:
 
 
 func _refresh_character_area() -> void:
-	big_name_label.text = "플레이어 %d" % (game_state.current_player + 1)
+	var current := game_state.current_player
+
+	if current != _current_portrait_player:
+		_current_portrait_player = current
+		var profile: CharacterProfile = player_character_assignments[current] if current < player_character_assignments.size() else null
+		var label_text := (
+			"플레이어 %d - %s" % [current + 1, profile.display_name] if profile != null
+			else "플레이어 %d" % (current + 1)
+		)
+		_transition_portrait(profile, label_text)
+
 	for p in small_tag_rows.size():
-		small_tag_rows[p].visible = (p != game_state.current_player)
+		small_tag_rows[p].visible = (p != current)
 
 
 func _refresh_scoreboard_ui() -> void:

@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" path="res://scenes/Main.gd" id="1_script"]
 [ext_resource type="Script" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
+[ext_resource type="Script" path="res://scripts/dev/character_seed.gd" id="3_script"]
 
 [node name="Main" type="Control"]
 anchor_right = 1.0
@@ -67,7 +68,7 @@ anchor_bottom = 1.0
 theme_override_constants/margin_left = 16
 theme_override_constants/margin_top = 14
 theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 10
+theme_override_constants/margin_bottom = 20
 
 [node name="MainHBox" type="HBoxContainer" parent="GameScreen/Margin"]
 layout_mode = 2
@@ -82,6 +83,15 @@ theme_override_constants/separation = 8
 layout_mode = 2
 size_flags_vertical = 3
 custom_minimum_size = Vector2(0, 200)
+
+[node name="PortraitStack" type="Control" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea"]
+layout_mode = 2
+
+[node name="PortraitTextureA" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack"]
+expand_mode = 1
+
+[node name="PortraitTextureB" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack"]
+expand_mode = 1
 
 [node name="BigNameLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn"]
 layout_mode = 2
@@ -237,3 +247,6 @@ cancel_button_text = "취소"
 
 [node name="DebugHotkeys" type="Node" parent="."]
 script = ExtResource("2_script")
+
+[node name="CharacterSeed" type="Node" parent="."]
+script = ExtResource("3_script")
