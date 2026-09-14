@@ -1,6 +1,7 @@
 extends Node2D
 
 const MAX_REROLLS := 2
+const NUM_PLAYERS := 2
 
 const CATEGORY_NAMES: Array[String] = [
 	"Aces",
@@ -26,14 +27,18 @@ var locked_style := StyleBoxFlat.new()
 var score_calculators: Array[Callable] = []
 var score_labels: Array[Label] = []
 var confirm_buttons: Array[Button] = []
-var score_confirmed: Array[bool] = [false, false, false, false, false, false, false, false, false, false, false, false]
-var confirmed_scores: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+# player_score_confirmed[player][category] / player_confirmed_scores[player][category]
+var player_score_confirmed: Array = []
+var player_confirmed_scores: Array = []
+var current_player: int = 0
 var game_over: bool = false
 
 @onready var dice_labels: Array[Label] = [$Dice1, $Dice2, $Dice3, $Dice4, $Dice5]
 @onready var roll_button: Button = $RollButton
 @onready var new_turn_button: Button = $NewTurnButton
 @onready var reroll_label: Label = $RerollLabel
+@onready var turn_label: Label = $TurnLabel
 @onready var score_list: VBoxContainer = $ScoreboardScroll/ScoreList
 @onready var total_score_label: Label = $TotalScoreLabel
 @onready var game_over_label: Label = $GameOverLabel
@@ -70,11 +75,16 @@ func _ready() -> void:
 		calc_yacht,
 	]
 
-	_roll_dice()
+	for p in NUM_PLAYERS:
+		player_score_confirmed.append(_make_bool_array(CATEGORY_NAMES.size(), false))
+		player_confirmed_scores.append(_make_int_array(CATEGORY_NAMES.size(), 0))
+
 	_build_scoreboard()
+	_roll_dice()
 	_update_reroll_label()
 	_update_score_previews()
 	_update_total_score()
+	turn_label.text = "현재 턴: 플레이어 %d" % (current_player + 1)
 
 
 func _on_dice_gui_input(event: InputEvent, index: int) -> void:
@@ -114,6 +124,10 @@ func _roll_dice() -> void:
 
 
 func _on_new_turn_button_pressed() -> void:
+	_reset_dice_state()
+
+
+func _reset_dice_state() -> void:
 	rerolls_left = MAX_REROLLS
 	roll_button.disabled = false
 
@@ -121,6 +135,7 @@ func _on_new_turn_button_pressed() -> void:
 		dice_locked[i] = false
 		_update_dice_visual(i)
 
+	_roll_dice()
 	_update_reroll_label()
 	_update_score_previews()
 
@@ -156,57 +171,101 @@ func _build_scoreboard() -> void:
 
 
 func _on_confirm_pressed(index: int) -> void:
-	if game_over or score_confirmed[index]:
+	if game_over or player_score_confirmed[current_player][index]:
 		return
 
 	var value: int = score_calculators[index].call(dice_results)
-	confirmed_scores[index] = value
-	score_confirmed[index] = true
+	player_confirmed_scores[current_player][index] = value
+	player_score_confirmed[current_player][index] = true
 	score_labels[index].text = str(value)
 	confirm_buttons[index].disabled = true
 
 	_update_total_score()
 
-	if _all_categories_confirmed():
+	if _player_completed(0) and _player_completed(1):
 		game_over = true
 		_show_game_over()
-	else:
-		_on_new_turn_button_pressed()
+		return
+
+	_switch_to_player(1 - current_player)
 
 
-func _all_categories_confirmed() -> bool:
-	for confirmed in score_confirmed:
+func _player_completed(player: int) -> bool:
+	for confirmed in player_score_confirmed[player]:
 		if not confirmed:
 			return false
 	return true
 
 
+func _switch_to_player(player: int) -> void:
+	current_player = player
+	turn_label.text = "현재 턴: 플레이어 %d" % (player + 1)
+	_refresh_scoreboard_ui()
+	_reset_dice_state()
+	_update_total_score()
+
+
+func _refresh_scoreboard_ui() -> void:
+	for i in CATEGORY_NAMES.size():
+		if player_score_confirmed[current_player][i]:
+			score_labels[i].text = str(player_confirmed_scores[current_player][i])
+			confirm_buttons[i].disabled = true
+		else:
+			confirm_buttons[i].disabled = false
+
+
 func _update_total_score() -> void:
+	total_score_label.text = "플레이어 %d 합계: %d" % [current_player + 1, _player_total(current_player)]
+
+
+func _player_total(player: int) -> int:
 	var total := 0
-	for i in confirmed_scores.size():
-		if score_confirmed[i]:
-			total += confirmed_scores[i]
-	total_score_label.text = "합계: %d" % total
+	for score in player_confirmed_scores[player]:
+		total += score
+	return total
 
 
 func _show_game_over() -> void:
 	roll_button.disabled = true
 	new_turn_button.disabled = true
+	for button in confirm_buttons:
+		button.disabled = true
 
-	var total := 0
-	for score in confirmed_scores:
-		total += score
+	var total_p1 := _player_total(0)
+	var total_p2 := _player_total(1)
 
-	game_over_label.text = "게임 종료! 최종 합계: %d" % total
+	var result_text: String
+	if total_p1 > total_p2:
+		result_text = "플레이어 1 승리"
+	elif total_p2 > total_p1:
+		result_text = "플레이어 2 승리"
+	else:
+		result_text = "무승부"
+
+	game_over_label.text = "게임 종료! %s\n플레이어 1: %d점 / 플레이어 2: %d점" % [result_text, total_p1, total_p2]
 	game_over_label.visible = true
 
 
 func _update_score_previews() -> void:
 	for i in CATEGORY_NAMES.size():
-		if score_confirmed[i]:
+		if player_score_confirmed[current_player][i]:
 			continue
 		var value: int = score_calculators[i].call(dice_results)
 		score_labels[i].text = str(value)
+
+
+func _make_bool_array(size: int, value: bool) -> Array[bool]:
+	var arr: Array[bool] = []
+	for i in size:
+		arr.append(value)
+	return arr
+
+
+func _make_int_array(size: int, value: int) -> Array[int]:
+	var arr: Array[int] = []
+	for i in size:
+		arr.append(value)
+	return arr
 
 
 func calc_aces(dice: Array[int]) -> int:
