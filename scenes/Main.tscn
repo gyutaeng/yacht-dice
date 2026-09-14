@@ -1,68 +1,74 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://d0xhntulpbyui"]
 
-[ext_resource type="Script" path="res://scenes/Main.gd" id="1_script"]
-[ext_resource type="Script" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
-[ext_resource type="Script" path="res://scripts/dev/character_seed.gd" id="3_script"]
+[ext_resource type="Script" uid="uid://bahupo0io1w3n" path="res://scenes/Main.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://yygi4w0ce8kc" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
+[ext_resource type="Script" uid="uid://crpiw5pshw1xu" path="res://scripts/dev/character_seed.gd" id="3_script"]
 
-[node name="Main" type="Control"]
+[node name="Main" type="Control" unique_id=344423488]
+layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("1_script")
 
-[node name="StartScreen" type="Control" parent="."]
+[node name="StartScreen" type="Control" parent="." unique_id=1911768191]
+anchors_preset = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="CenterContainer" type="CenterContainer" parent="StartScreen"]
+[node name="CenterContainer" type="CenterContainer" parent="StartScreen" unique_id=2032308668]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="VBox" type="VBoxContainer" parent="StartScreen/CenterContainer"]
+[node name="VBox" type="VBoxContainer" parent="StartScreen/CenterContainer" unique_id=1323956511]
 layout_mode = 2
 theme_override_constants/separation = 24
 alignment = 1
 
-[node name="TitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox"]
+[node name="TitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox" unique_id=373646758]
 layout_mode = 2
 theme_override_font_sizes/font_size = 40
 text = "요트다이스"
 horizontal_alignment = 1
 
-[node name="SubtitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox"]
+[node name="SubtitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox" unique_id=1427528520]
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "인원수를 선택하세요"
 horizontal_alignment = 1
 
-[node name="PlayerCountRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox"]
+[node name="PlayerCountRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox" unique_id=1903019093]
 layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="Players2Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow"]
-layout_mode = 2
+[node name="Players2Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=1359441607]
 custom_minimum_size = Vector2(120, 60)
+layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "2명"
 
-[node name="Players3Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow"]
-layout_mode = 2
+[node name="Players3Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=2136848829]
 custom_minimum_size = Vector2(120, 60)
+layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "3명"
 
-[node name="Players4Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow"]
-layout_mode = 2
+[node name="Players4Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=454485882]
 custom_minimum_size = Vector2(120, 60)
+layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "4명"
 
-[node name="GameScreen" type="Control" parent="."]
+[node name="GameScreen" type="Control" parent="." unique_id=891039919]
 visible = false
+anchors_preset = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="Margin" type="MarginContainer" parent="GameScreen"]
+[node name="Margin" type="MarginContainer" parent="GameScreen" unique_id=1597810994]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 theme_override_constants/margin_left = 16
@@ -70,33 +76,34 @@ theme_override_constants/margin_top = 14
 theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 20
 
-[node name="MainHBox" type="HBoxContainer" parent="GameScreen/Margin"]
+[node name="MainHBox" type="HBoxContainer" parent="GameScreen/Margin" unique_id=96154969]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="LeftColumn" type="VBoxContainer" parent="GameScreen/Margin/MainHBox"]
-layout_mode = 2
+[node name="LeftColumn" type="VBoxContainer" parent="GameScreen/Margin/MainHBox" unique_id=291092939]
 custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="BigPortraitArea" type="PanelContainer" parent="GameScreen/Margin/MainHBox/LeftColumn"]
+[node name="BigPortraitArea" type="PanelContainer" parent="GameScreen/Margin/MainHBox/LeftColumn" unique_id=1389183868]
+custom_minimum_size = Vector2(0, 200)
 layout_mode = 2
 size_flags_vertical = 3
-custom_minimum_size = Vector2(0, 200)
 
-[node name="PortraitStack" type="Control" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea"]
+[node name="PortraitStack" type="Control" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea" unique_id=2086521031]
 layout_mode = 2
 
-[node name="PortraitTextureA" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack"]
+[node name="PortraitTextureA" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack" unique_id=988414761]
+layout_mode = 0
 expand_mode = 1
 
-[node name="PortraitTextureB" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack"]
+[node name="PortraitTextureB" type="TextureRect" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack" unique_id=423913894]
+layout_mode = 0
 expand_mode = 1
 
-[node name="SpecialHandLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea"]
+[node name="SpecialHandLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea" unique_id=139334577]
 visible = false
 layout_mode = 2
-mouse_filter = 2
 theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
 theme_override_colors/font_outline_color = Color(0.1, 0.05, 0, 1)
 theme_override_constants/outline_size = 8
@@ -106,135 +113,139 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 2
 
-[node name="BigNameLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn"]
+[node name="BigNameLabel" type="Label" parent="GameScreen/Margin/MainHBox/LeftColumn" unique_id=564489657]
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "플레이어 1"
 horizontal_alignment = 1
 
-[node name="SmallTagsRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/LeftColumn"]
+[node name="SmallTagsRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/LeftColumn" unique_id=1137518186]
 layout_mode = 2
-alignment = 1
 theme_override_constants/separation = 10
+alignment = 1
 
-[node name="RightColumn" type="VBoxContainer" parent="GameScreen/Margin/MainHBox"]
+[node name="RightColumn" type="VBoxContainer" parent="GameScreen/Margin/MainHBox" unique_id=991422403]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 8
 
-[node name="TurnLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn"]
+[node name="TurnLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=1010927115]
 layout_mode = 2
 theme_override_font_sizes/font_size = 24
 text = "현재 턴: 플레이어 1"
 horizontal_alignment = 1
 
-[node name="DiceAndControls" type="VBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn"]
+[node name="DiceAndControls" type="VBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=994061739]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="DiceRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls"]
+[node name="DiceRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls" unique_id=916028542]
 layout_mode = 2
-alignment = 1
 theme_override_constants/separation = 10
+alignment = 1
 
-[node name="Dice1" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow"]
-layout_mode = 2
+[node name="Dice1" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow" unique_id=1890855115]
 custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
 theme_override_font_sizes/font_size = 30
 text = "3"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Dice2" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow"]
-layout_mode = 2
+[node name="Dice2" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow" unique_id=1779552562]
 custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
 theme_override_font_sizes/font_size = 30
 text = "5"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Dice3" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow"]
-layout_mode = 2
+[node name="Dice3" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow" unique_id=1529690415]
 custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
 theme_override_font_sizes/font_size = 30
 text = "1"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Dice4" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow"]
-layout_mode = 2
+[node name="Dice4" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow" unique_id=1300074903]
 custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
 theme_override_font_sizes/font_size = 30
 text = "6"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Dice5" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow"]
-layout_mode = 2
+[node name="Dice5" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow" unique_id=294273169]
 custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
 theme_override_font_sizes/font_size = 30
 text = "2"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="RerollLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls"]
+[node name="RerollLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls" unique_id=1304284973]
 layout_mode = 2
 theme_override_font_sizes/font_size = 15
 text = "남은 리롤 횟수: 2"
 horizontal_alignment = 1
 
-[node name="ButtonsRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls"]
+[node name="ButtonsRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls" unique_id=1809218374]
 layout_mode = 2
-alignment = 1
 theme_override_constants/separation = 12
+alignment = 1
 
-[node name="RollButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow"]
-layout_mode = 2
+[node name="RollButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow" unique_id=867491253]
 custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
 text = "주사위 굴리기"
 
-[node name="ConfirmScoreButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow"]
-layout_mode = 2
+[node name="ConfirmScoreButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow" unique_id=623993552]
 custom_minimum_size = Vector2(200, 40)
+layout_mode = 2
 disabled = true
 text = "점수 확정"
 
-[node name="ScoreboardRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn"]
+[node name="ScoreboardRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=1672270891]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="InputBlocker" type="Control" parent="GameScreen"]
+[node name="InputBlocker" type="Control" parent="GameScreen" unique_id=947620132]
 visible = false
+anchors_preset = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 mouse_filter = 1
 
-[node name="GameOverOverlay" type="Control" parent="."]
+[node name="GameOverOverlay" type="Control" parent="." unique_id=1505900357]
 visible = false
+anchors_preset = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="DimBackground" type="ColorRect" parent="GameOverOverlay"]
+[node name="DimBackground" type="ColorRect" parent="GameOverOverlay" unique_id=545154454]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
+mouse_filter = 1
 color = Color(0, 0, 0, 0.65)
-mouse_filter = 1
 
-[node name="CenterContainer" type="CenterContainer" parent="GameOverOverlay"]
+[node name="CenterContainer" type="CenterContainer" parent="GameOverOverlay" unique_id=990549168]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="Panel" type="PanelContainer" parent="GameOverOverlay/CenterContainer"]
+[node name="Panel" type="PanelContainer" parent="GameOverOverlay/CenterContainer" unique_id=410475313]
 layout_mode = 2
 
-[node name="VBox" type="VBoxContainer" parent="GameOverOverlay/CenterContainer/Panel"]
-layout_mode = 2
+[node name="VBox" type="VBoxContainer" parent="GameOverOverlay/CenterContainer/Panel" unique_id=472496858]
 custom_minimum_size = Vector2(480, 0)
+layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="GameOverLabel" type="Label" parent="GameOverOverlay/CenterContainer/Panel/VBox"]
+[node name="GameOverLabel" type="Label" parent="GameOverOverlay/CenterContainer/Panel/VBox" unique_id=315927313]
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.9, 0.3, 1)
 theme_override_font_sizes/font_size = 22
@@ -242,33 +253,30 @@ text = "게임 종료!"
 horizontal_alignment = 1
 autowrap_mode = 2
 
-[node name="GameOverButtonsRow" type="HBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox"]
+[node name="GameOverButtonsRow" type="HBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox" unique_id=1264757333]
 layout_mode = 2
-alignment = 1
 theme_override_constants/separation = 16
+alignment = 1
 
-[node name="RestartButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow"]
-layout_mode = 2
+[node name="RestartButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow" unique_id=452803229]
 custom_minimum_size = Vector2(140, 44)
+layout_mode = 2
 text = "다시 하기"
 
-[node name="ToTitleButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow"]
-layout_mode = 2
+[node name="ToTitleButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow" unique_id=643518459]
 custom_minimum_size = Vector2(140, 44)
+layout_mode = 2
 text = "처음으로"
 
-[node name="QuitConfirmDialog" type="ConfirmationDialog" parent="."]
+[node name="QuitConfirmDialog" type="ConfirmationDialog" parent="." unique_id=1962735809]
 title = "그만두기"
 initial_position = 1
-dialog_text = "정말 그만두시겠습니까? 지금까지의 진행 상황은 사라집니다."
 ok_button_text = "그만두기"
+dialog_text = "정말 그만두시겠습니까? 지금까지의 진행 상황은 사라집니다."
 cancel_button_text = "취소"
 
-[node name="SpecialHandSfxPlayer" type="AudioStreamPlayer" parent="."]
-volume_db = -6.0
-
-[node name="DebugHotkeys" type="Node" parent="."]
+[node name="DebugHotkeys" type="Node" parent="." unique_id=1371383245]
 script = ExtResource("2_script")
 
-[node name="CharacterSeed" type="Node" parent="."]
+[node name="CharacterSeed" type="Node" parent="." unique_id=1360839358]
 script = ExtResource("3_script")

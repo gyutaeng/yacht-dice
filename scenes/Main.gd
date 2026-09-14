@@ -5,8 +5,7 @@ const SMALL_TAG_SIZE := 56.0
 const PORTRAIT_FADE_DURATION := 0.3
 const PLACEHOLDER_PORTRAIT_PATH := "res://assets/placeholder_portrait.png"
 
-# 나중에 실제 효과음으로 바꿀 때 건드릴 곳은 이 한 줄뿐이다.
-const SPECIAL_HAND_SFX_PATH := "res://assets/sfx/special_hand.wav"
+# 효과음은 SfxBank가 special_hand_rolled를 직접 구독해서 재생한다(여기선 화면 연출만).
 const SPECIAL_HAND_DISPLAY_DURATION := 1.5
 const SPECIAL_HAND_FADE_DURATION := 0.15
 
@@ -59,7 +58,6 @@ var _special_hand_tween: Tween
 @onready var small_tags_row: HBoxContainer = $GameScreen/Margin/MainHBox/LeftColumn/SmallTagsRow
 @onready var special_hand_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/SpecialHandLabel
 @onready var input_blocker: Control = $GameScreen/InputBlocker
-@onready var special_hand_sfx_player: AudioStreamPlayer = $SpecialHandSfxPlayer
 
 @onready var dice_labels: Array[Label] = [
 	$GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow/Dice1,
@@ -151,7 +149,6 @@ func _ready() -> void:
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
 	_placeholder_texture = load(PLACEHOLDER_PORTRAIT_PATH)
-	special_hand_sfx_player.stream = load(SPECIAL_HAND_SFX_PATH)
 	portrait_texture_a.modulate.a = 1.0
 	portrait_texture_b.modulate.a = 0.0
 	# 처음 전환이 걸리는 시점엔 방금 보이게 된 GameScreen의 레이아웃이 아직
@@ -423,8 +420,8 @@ func _on_special_hand_rolled(_player_index: int, category: int, _points: int) ->
 	_play_special_hand_effect(category)
 
 
-# 캐릭터 보이스는 이 함수가 아니라 GameEvents.special_hand_rolled를 직접 구독해서
-# 따로 반응한다(1-4). 여기서는 화면 연출과 효과음만 맡는다.
+# 캐릭터 보이스와 효과음은 이 함수가 아니라 GameEvents.special_hand_rolled를 각자
+# 직접 구독해서 따로 반응한다(VoiceBank/SfxBank). 여기서는 화면 연출만 맡는다.
 func _play_special_hand_effect(category: int) -> void:
 	if _special_hand_tween != null and _special_hand_tween.is_valid():
 		_special_hand_tween.kill()
@@ -433,7 +430,6 @@ func _play_special_hand_effect(category: int) -> void:
 	special_hand_label.modulate.a = 0.0
 	special_hand_label.visible = true
 	input_blocker.visible = true
-	special_hand_sfx_player.play()
 
 	var hold_duration := SPECIAL_HAND_DISPLAY_DURATION - 2.0 * SPECIAL_HAND_FADE_DURATION
 

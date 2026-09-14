@@ -67,6 +67,12 @@ var player_bonus_achieved: Array[bool] = []
 # 새로 성립했을 때만" 다시 띄우는 기준으로 쓴다.
 var _shown_special_hand_rank_this_turn: int = -1
 
+# game_started는 한 판에 딱 한 번만 나가야 한다. start_turn()은 원래 게임당
+# 한 번만 불리지만, 그 "한 번"이라는 보장을 호출 횟수가 아니라 이 플래그로
+# 명시적으로 걸어둔다(나중에 서버 스냅샷 복원 등으로 start_turn()이 다시
+# 불릴 일이 생겨도 인사말이 두 번 나가지 않도록).
+var _game_started_emitted: bool = false
+
 var _rng: RandomNumberGenerator
 var _score_calculators: Array[Callable] = []
 
@@ -105,6 +111,9 @@ func _init(requested_player_count: int = DEFAULT_PLAYER_COUNT, rng: RandomNumber
 
 
 func start_turn() -> void:
+	if not _game_started_emitted:
+		_game_started_emitted = true
+		GameEvents.game_started.emit(player_count)
 	_begin_turn()
 	state_changed.emit()
 
