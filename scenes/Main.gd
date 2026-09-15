@@ -72,7 +72,7 @@ var _greeting_active: bool = false
 @onready var small_tags_row: HBoxContainer = $GameScreen/Margin/MainHBox/LeftColumn/SmallTagsRow
 @onready var special_hand_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/SpecialHandLabel
 @onready var input_blocker: Control = $GameScreen/InputBlocker
-@onready var greeting_skip_hint: Label = $GameScreen/InputBlocker/GreetingSkipHint
+@onready var greeting_skip_button: Button = $GameScreen/InputBlocker/GreetingSkipButton
 
 @onready var dice_labels: Array[Label] = [
 	$GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow/Dice1,
@@ -198,7 +198,7 @@ func _ready() -> void:
 	VoiceBank.greeting_step_started.connect(_on_greeting_step_started)
 	VoiceBank.greeting_sequence_finished.connect(_on_greeting_sequence_finished)
 
-	input_blocker.gui_input.connect(_on_input_blocker_gui_input)
+	greeting_skip_button.pressed.connect(_on_greeting_skip_button_pressed)
 
 	for i in dice_labels.size():
 		var label := dice_labels[i]
@@ -209,12 +209,12 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# 인사 연출 중에는 어떤 키를 눌러도 건너뛰기다(ESC 포함) - 종료 확인
-	# 다이얼로그보다 먼저 검사해서, 연출 중 ESC가 종료 확인을 띄우지 않고
-	# 건너뛰기로만 동작하게 한다. 게임 화면엔 텍스트 입력 위젯이 없어서
-	# 아무 키나 받아도 다른 입력과 충돌하지 않는다.
-	if _greeting_active and event is InputEventKey and event.pressed and not event.echo:
-		VoiceBank.request_skip_greeting()
+	# 인사 연출 중에는 키보드 입력을 전부 무시한다(ESC 포함) - [인사 건너뛰기]
+	# 버튼을 눌러야만 건너뛰어진다. 연출을 구경하고 싶은 사람이 아무 키나
+	# 눌러서(또는 ESC로 종료 확인을 열려다) 실수로 건너뛰는 일이 없게 하기
+	# 위함이다. 연출이 끝나면(_greeting_active=false) 이 분기를 안 타므로
+	# ESC가 원래대로 종료 확인을 띄운다.
+	if _greeting_active and event is InputEventKey:
 		get_viewport().set_input_as_handled()
 		return
 
@@ -361,7 +361,7 @@ func _reset_portrait_transition_state() -> void:
 	# 방어적으로 여기서도 정리한다(VoiceBank.configure()의 방어적 초기화와 같은 이유).
 	_greeting_active = false
 	debug_hotkeys.greeting_active = false
-	greeting_skip_hint.visible = false
+	greeting_skip_button.visible = false
 
 
 func _start_new_game(profiles: Array[CharacterProfile]) -> void:
@@ -501,7 +501,7 @@ func _start_greeting_sequence() -> void:
 	_greeting_active = true
 	debug_hotkeys.greeting_active = true
 	input_blocker.visible = true
-	greeting_skip_hint.visible = true
+	greeting_skip_button.visible = true
 	VoiceBank.play_greeting_sequence()
 
 
@@ -523,7 +523,7 @@ func _on_greeting_sequence_finished() -> void:
 	_greeting_active = false
 	debug_hotkeys.greeting_active = false
 	input_blocker.visible = false
-	greeting_skip_hint.visible = false
+	greeting_skip_button.visible = false
 
 	var first_turn_player := game_state.current_player if game_state != null else 0
 	if first_turn_player != _current_portrait_player:
@@ -532,9 +532,10 @@ func _on_greeting_sequence_finished() -> void:
 		_transition_portrait(profile, _player_label_text(first_turn_player, profile))
 
 
-func _on_input_blocker_gui_input(event: InputEvent) -> void:
-	if _greeting_active and event is InputEventMouseButton and event.pressed:
-		VoiceBank.request_skip_greeting()
+## [인사 건너뛰기] 버튼을 눌러야만 건너뛰어진다 - 화면 클릭이나 키보드로는
+## 안 된다(연출을 보고 싶은 사람이 실수로 건너뛰지 않도록).
+func _on_greeting_skip_button_pressed() -> void:
+	VoiceBank.request_skip_greeting()
 
 
 func _on_special_hand_rolled(_player_index: int, category: int, _points: int) -> void:

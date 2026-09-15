@@ -17,6 +17,12 @@ func run(r) -> void:
 	_test_priority_ordering(r)
 	_test_greeting_sequence_completes_synchronously_when_no_voices(r)
 	_test_skip_greeting_when_not_active_is_noop(r)
+	_test_request_voice_plays_immediately_when_idle(r)
+	_test_request_voice_preempts_higher_priority(r)
+	_test_request_voice_queues_lower_priority(r)
+	_test_pending_request_keeps_higher_priority_on_conflict(r)
+	_test_try_play_pending_discards_after_timeout(r)
+	_test_try_play_pending_plays_fresh_request(r)
 
 
 func _test_voice_events_table(r) -> void:
@@ -156,3 +162,100 @@ func _test_skip_greeting_when_not_active_is_noop(r) -> void:
 	VoiceBank.request_skip_greeting()  # 진행 중인 시퀀스가 없을 때 - 아무 일도 없어야 한다.
 
 	r.expect_true("연출 중이 아닐 때 건너뛰기를 불러도 greeting_sequence_finished가 안 뜸", not finished_fired[0])
+
+
+## 아래는 전역 재생 조정(_request_voice/_preempt_and_play/_try_play_pending)을
+## 화이트박스로 검증한다. 실제 캐릭터/오디오 파일이 필요 없다 - _play_for_player를
+## 거치지 않고 _request_voice()를 직접 불러서, 빈 AudioStreamWAV를 "어떤
+## 소리든 상관없는 더미"로 쓴다. 매 테스트가 configure()로 상태를 리셋한다.
+func _dummy_stream() -> AudioStream:
+	return AudioStreamWAV.new()
+
+
+func _test_request_voice_plays_immediately_when_idle(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._request_voice(0, "test.a", 50, _dummy_stream())
+
+	r.expect_eq("아무도 안 나고 있으면 즉시 그 슬롯이 전역 활성이 됨", VoiceBank._global_active_player, 0)
+	r.expect_eq("전역 우선순위도 그 요청 값으로 설정됨", VoiceBank._global_active_priority, 50)
+
+	VoiceBank.configure([])
+
+
+func _test_request_voice_preempts_higher_priority(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._request_voice(0, "test.a", 50, _dummy_stream())
+	VoiceBank._request_voice(1, "test.b", 90, _dummy_stream())
+
+	r.expect_eq("더 높은 우선순위가 들어오면 전역 활성 슬롯이 즉시 바뀜", VoiceBank._global_active_player, 1)
+	r.expect_eq("전역 우선순위도 새 값으로 바로 갱신됨(교체 결정 시점)", VoiceBank._global_active_priority, 90)
+	r.expect_true("밀려난 슬롯에 페이드아웃 트윈이 걸림", VoiceBank._slot_tweens[0] != null and VoiceBank._slot_tweens[0].is_valid())
+
+	VoiceBank.configure([])
+
+
+func _test_request_voice_queues_lower_priority(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._request_voice(0, "test.a", 90, _dummy_stream())
+	VoiceBank._request_voice(1, "test.b", 50, _dummy_stream())
+
+	r.expect_eq("우선순위가 같거나 낮으면 전역 활성 슬롯은 안 바뀜", VoiceBank._global_active_player, 0)
+	r.expect_true("대기열이 비어있지 않음", not VoiceBank._pending_request.is_empty())
+	r.expect_eq("대기열에 들어간 건 이번 요청(플레이어 1)", VoiceBank._pending_request["player"], 1)
+
+	VoiceBank.configure([])
+
+
+func _test_pending_request_keeps_higher_priority_on_conflict(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._request_voice(0, "test.a", 90, _dummy_stream())  # 전역 활성.
+	VoiceBank._request_voice(1, "test.b", 50, _dummy_stream())  # 대기열에 들어감.
+	VoiceBank._request_voice(2, "test.c", 30, _dummy_stream())  # 대기열보다 낮음 - 안 바뀜.
+
+	r.expect_eq("대기열보다 낮은 우선순위는 대기열을 안 바꿈", VoiceBank._pending_request["player"], 1)
+
+	VoiceBank._request_voice(2, "test.d", 70, _dummy_stream())  # 대기열보다 높음 - 교체.
+
+	r.expect_eq("대기열보다 높은 우선순위가 오면 대기열이 교체됨", VoiceBank._pending_request["player"], 2)
+
+	VoiceBank.configure([])
+
+
+func _test_try_play_pending_discards_after_timeout(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._pending_request = {
+		"player": 1, "event_key": "test.old", "priority": 50,
+		"stream": _dummy_stream(),
+		"queued_at_msec": Time.get_ticks_msec() - (VoiceBank.VOICE_WAIT_TIMEOUT_MSEC + 500),
+	}
+	VoiceBank._global_active_player = -1
+
+	VoiceBank._try_play_pending()
+
+	r.expect_eq("너무 오래 기다린 대기는 재생 안 하고 버려짐(전역 활성 안 됨)", VoiceBank._global_active_player, -1)
+	r.expect_true("버린 뒤 대기열은 비어있음", VoiceBank._pending_request.is_empty())
+
+	VoiceBank.configure([])
+
+
+func _test_try_play_pending_plays_fresh_request(r) -> void:
+	VoiceBank.configure([CharacterLibrary.get_builtin_fallback(), CharacterLibrary.get_builtin_fallback()])
+
+	VoiceBank._pending_request = {
+		"player": 1, "event_key": "test.fresh", "priority": 50,
+		"stream": _dummy_stream(),
+		"queued_at_msec": Time.get_ticks_msec(),
+	}
+	VoiceBank._global_active_player = -1
+
+	VoiceBank._try_play_pending()
+
+	r.expect_eq("제때 소비된 대기는 그 플레이어 슬롯을 전역 활성으로 만듦", VoiceBank._global_active_player, 1)
+	r.expect_eq("우선순위도 그 요청 값으로 설정됨", VoiceBank._global_active_priority, 50)
+
+	VoiceBank.configure([])
