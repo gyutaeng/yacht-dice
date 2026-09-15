@@ -353,8 +353,18 @@ func _append_transfer_debug_log(text: String) -> void:
 ## 닉네임만 채운 빈 CharacterProfile로 방어적으로 폴백한다. 이 배열이 그대로
 ## VoiceBank.configure()/_build_character_area()/_build_scoreboard()로
 ## 넘어가므로(2-4에서 이미 뚫어놓은 경로) 그 함수들은 손댈 필요가 없다.
+## 서버가 이제 전원의 pack_ready를 받은 뒤에만 game_started를 보내므로
+## (2-5 후속) 이 시점엔 보통 이미 전부 끝나 있어야 한다. 그래도 클라이언트
+## 쪽에도 한 겹 더 방어선을 둔다 - 서버의 대기가 놓쳤거나(네트워크 유실 등)
+## 타임아웃으로 그냥 진행한 경우, 아직 처리 중인 해시가 남아있으면 로컬
+## 처리(이미 받은 바이트를 푸는 것뿐이라 유한 시간)가 끝날 때까지 기다린다.
 func _on_game_started(player_count: int) -> void:
 	print("[온라인] 게임 시작! (%d인)" % player_count)
+
+	if not _pack_transfer.is_all_resolved():
+		if BuildInfo.DEBUG_MODE:
+			_append_transfer_debug_log("game_started 도착했지만 아직 처리 중인 해시가 남음(서버의 pack_ready 대기를 놓쳤거나 타임아웃) - 로컬에서 마저 기다림")
+		await _pack_transfer.wait_until_all_resolved()
 
 	var profiles: Array[CharacterProfile] = []
 	for i in player_count:
@@ -364,13 +374,36 @@ func _on_game_started(player_count: int) -> void:
 		var resolved := _pack_transfer.get_profile(i)
 		if resolved != null:
 			profiles.append(resolved)
+			_debug_log_slot_connection(i, resolved)
 			continue
+		if BuildInfo.DEBUG_MODE:
+			_append_transfer_debug_log("[P%d] game_started 도착 시점에 PackTransferClient.get_profile(%d)이 아직 null - 전송/검증이 안 끝난 상태에서 슬롯이 확정됨(기본 프로필로 대체)" % [i + 1, i])
 		var profile := CharacterProfile.new()
 		var display_name: String = _players.get(i, {}).get("meta", {}).get("display_name", "")
 		profile.display_name = display_name if not display_name.is_empty() else "플레이어 %d" % (i + 1)
 		profiles.append(profile)
 
 	game_play_started.emit(_client, _my_index, profiles)
+
+
+## 사용자 요청 진단(2-5) - "팩은 도착했는데 아무도 안 쓴다"는 증상을 잡기
+## 위한 마지막 확인 지점. get_profile()이 non-null을 돌려줬어도, 실제로
+## 초상이 로드되는지/보이스가 몇 개 매핑됐는지까지 봐야 "저장은 됐는데
+## 실제 연결에서 빠졌는지"를 구분할 수 있다.
+func _debug_log_slot_connection(player_index: int, profile: CharacterProfile) -> void:
+	if not BuildInfo.DEBUG_MODE:
+		return
+	var portrait_ok := false
+	if profile.portrait_file != "":
+		portrait_ok = CharacterLibrary.load_profile_texture(profile, profile.portrait_file) != null
+	var voice_count := 0
+	for key in profile.voice_map:
+		voice_count += profile.voice_map[key].size()
+	_append_transfer_debug_log("[P%d] 슬롯 %d에 연결됨 / 초상 %s / 보이스 %d개 매핑" % [
+		player_index + 1, player_index,
+		"OK" if portrait_ok else ("없음" if profile.portrait_file == "" else "로드 실패(%s)" % profile.portrait_file),
+		voice_count,
+	])
 
 
 func _on_server_error(_code: String, message: String) -> void:

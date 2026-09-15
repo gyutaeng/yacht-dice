@@ -26,6 +26,11 @@ func run(r) -> void:
 	_test_transfer_scheduler_timeout(r)
 	_test_transfer_scheduler_empty_queue_finishes_immediately(r)
 
+	_test_awaiting_ready_blocks_until_everyone_acks(r)
+	_test_awaiting_ready_early_ack_before_queue_drains_still_counts(r)
+	_test_awaiting_ready_timeout_lets_stragglers_go(r)
+	_test_awaiting_ready_ignores_empty_slots(r)
+
 
 func _make_room_with_hashes(hashes: Array) -> Room:
 	var room := Room.new("TEST", hashes.size())
@@ -103,7 +108,7 @@ func _test_transfer_scheduler_full_round_trip(r) -> void:
 
 	var third := room.start_next_transfer(1700)
 	r.expect_eq("큐가 비면 빈 문자열", third, "")
-	r.expect_true("큐 소진 후 DONE", room.is_transfer_done())
+	r.expect_eq("큐 소진 후엔 곧장 DONE이 아니라 AWAITING_READY(2-5 후속)", room.transfer_state, Room.TransferState.AWAITING_READY)
 
 
 func _test_transfer_scheduler_ignores_unrequested_hash(r) -> void:
@@ -111,8 +116,8 @@ func _test_transfer_scheduler_ignores_unrequested_hash(r) -> void:
 	var room := _make_room_with_hashes([HASH_A, ""])
 	room.begin_transfer(0, 500)
 	room.close_collection_and_build_queue()
-	r.expect_true("요청이 하나도 없으면 큐가 비고 바로 DONE", room.transfer_queue.is_empty())
-	r.expect_true("요청 없는 방은 DONE", room.is_transfer_done())
+	r.expect_true("요청이 하나도 없으면 큐가 빔", room.transfer_queue.is_empty())
+	r.expect_eq("요청 없는 방은 AWAITING_READY(전원 pack_ready는 별도로 확인)", room.transfer_state, Room.TransferState.AWAITING_READY)
 
 
 func _test_transfer_scheduler_ignores_invalid_owner_index(r) -> void:
@@ -139,4 +144,69 @@ func _test_transfer_scheduler_empty_queue_finishes_immediately(r) -> void:
 	var room := _make_room_with_hashes(["", ""])
 	room.begin_transfer(0, 500)
 	room.close_collection_and_build_queue()
-	r.expect_true("아무도 팩이 없으면 즉시 DONE", room.is_transfer_done())
+	r.expect_eq("아무도 팩이 없으면 곧장 AWAITING_READY로(받을 게 없어도 pack_ready 확인은 거침)", room.transfer_state, Room.TransferState.AWAITING_READY)
+
+
+func _test_awaiting_ready_blocks_until_everyone_acks(r) -> void:
+	var room := _make_room_with_hashes(["", ""])
+	room.begin_transfer(0, 500)
+	room.close_collection_and_build_queue()
+	room.begin_awaiting_ready(500, 60000)
+
+	r.expect_true("아무도 아직 pack_ready를 안 보냈으면 전원 확인 실패", not room.all_players_pack_ready())
+	room.mark_pack_ready(0)
+	r.expect_true("한 명만 보냈으면 아직 전원 확인 실패", not room.all_players_pack_ready())
+	room.mark_pack_ready(1)
+	r.expect_true("전원이 보냈으면 확인 성공", room.all_players_pack_ready())
+
+	r.expect_eq("mark_transfer_done() 전엔 아직 AWAITING_READY", room.transfer_state, Room.TransferState.AWAITING_READY)
+	room.mark_transfer_done()
+	r.expect_true("mark_transfer_done() 후엔 DONE", room.is_transfer_done())
+
+
+## 받을 팩이 없는 클라이언트는 서버가 아직 COLLECTING/TRANSFERRING_PACK인
+## 동안에도 pack_ready를 보낼 수 있다 - 그 이른 도착이 나중에 AWAITING_READY에
+## 들어가도 유효해야 한다(transfer_ready_peers는 begin_transfer()에서만 리셋됨).
+func _test_awaiting_ready_early_ack_before_queue_drains_still_counts(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+	# 슬롯 1(팩 없음)은 아직 COLLECTING 단계인데도 곧바로 pack_ready를 보낸다.
+	room.mark_pack_ready(1)
+
+	room.register_pack_request(1, 0)
+	room.close_collection_and_build_queue()
+	room.start_next_transfer(500)
+	room.start_next_transfer(600)  # 큐 소진 -> AWAITING_READY
+	room.begin_awaiting_ready(600, 60000)
+
+	r.expect_true("이른 pack_ready가 안 지워지고 남아있음", not room.all_players_pack_ready())
+	room.mark_pack_ready(0)
+	r.expect_true("나머지 한 명도 보내면 전원 확인 성공", room.all_players_pack_ready())
+
+
+func _test_awaiting_ready_timeout_lets_stragglers_go(r) -> void:
+	var room := _make_room_with_hashes(["", ""])
+	room.begin_transfer(0, 500)
+	room.close_collection_and_build_queue()
+	room.begin_awaiting_ready(500, 1000)
+	room.mark_pack_ready(0)  # 슬롯 1은 끝까지 안 보냄.
+
+	r.expect_true("타임아웃 전엔 아직 시간 초과 아님", not room.is_pack_ready_timed_out(500 + 999))
+	r.expect_true("타임아웃이 지나면 안 온 사람이 있어도 진행 가능", room.is_pack_ready_timed_out(500 + 1001))
+	r.expect_true("여전히 전원 확인은 실패 상태(그래도 서버는 진행함)", not room.all_players_pack_ready())
+
+
+func _test_awaiting_ready_ignores_empty_slots(r) -> void:
+	# 슬롯 하나가 빈 방(인원수 3이지만 2명만 참가) - 빈 슬롯은 검사 대상이 아니다.
+	var room := Room.new("TEST", 3)
+	room.seat_player(100)
+	room.seat_player(101)
+	room.slots[0]["meta"] = {"id": "", "display_name": "P0", "pack_hash": ""}
+	room.slots[1]["meta"] = {"id": "", "display_name": "P1", "pack_hash": ""}
+	room.begin_transfer(0, 500)
+	room.close_collection_and_build_queue()
+	room.begin_awaiting_ready(500, 60000)
+
+	room.mark_pack_ready(0)
+	room.mark_pack_ready(1)
+	r.expect_true("빈 슬롯(2번)은 확인 대상이 아니라 둘만 보내도 전원 확인 성공", room.all_players_pack_ready())

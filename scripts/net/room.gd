@@ -11,12 +11,23 @@ enum State { LOBBY, TRANSFERRING, IN_GAME, ENDED }
 
 # 2-5(캐릭터 팩 전송) - TRANSFERRING 상태 안의 세부 단계. COLLECTING(요청
 # 수집 중) -> TRANSFERRING_PACK(해시 하나를 전송 중) -> ...(큐가 빌 때까지
-# 반복)... -> DONE(더 보낼 게 없음, IN_GAME으로 넘어갈 준비 완료). 한
-# 번에 해시 하나만 처리한다 - 방 전체 스케줄러를 이렇게 단순화하면
-# "한 수신자가 동시에 두 개를 받지 않는다"는 요구사항이 저절로
-# 만족된다(서로 다른 소유자의 업로드가 동시에 진행되지 않는 대가는
-# 있지만, 한 방에 최대 3개뿐이라 순서대로 처리해도 감당할 만하다).
-enum TransferState { COLLECTING, TRANSFERRING_PACK, DONE }
+# 반복)... -> AWAITING_READY(더 보낼 해시는 없지만, 받는 쪽이 검증·저장·
+# 프로필 확정까지 실제로 끝냈는지 전원의 확인을 기다림) -> DONE(전원 확인
+# 또는 대기 시간 초과, IN_GAME으로 넘어갈 준비 완료). 한 번에 해시 하나만
+# 처리한다 - 방 전체 스케줄러를 이렇게 단순화하면 "한 수신자가 동시에
+# 두 개를 받지 않는다"는 요구사항이 저절로 만족된다(서로 다른 소유자의
+# 업로드가 동시에 진행되지 않는 대가는 있지만, 한 방에 최대 3개뿐이라
+# 순서대로 처리해도 감당할 만하다).
+#
+# AWAITING_READY가 왜 필요한가(2-5 후속 버그 수정): 마지막 청크를 릴레이
+# 큐에 넣은 시점과, 받는 쪽이 그 바이트를 실제로 검증·해제·캐시 저장까지
+# 끝낸 시점은 다르다(웹 프리징 방지를 위해 파일 하나당 프레임을 쉬므로
+# 여러 프레임 걸림 - 실측: 파일 4개 팩에서 3프레임 차이). 큐가 비었다고
+# 바로 game_started를 보내면 "보냈다"를 "받는 쪽이 이미 다 처리해서 쓸 수
+# 있다"로 착각하는 것과 같다(WebSocket 보내기 대기열 버그와 같은 패턴,
+# 한 단계 위) - 그래서 전원이 pack_ready(자기 몫을 전부 처리했다는 영수증)
+# 를 보낼 때까지 한 단계 더 기다린다.
+enum TransferState { COLLECTING, TRANSFERRING_PACK, AWAITING_READY, DONE }
 
 const RECONNECT_TOKEN_BYTES := 24
 
@@ -50,6 +61,15 @@ var transfer_current_started_msec: int = 0
 # compute_needed_hashes()로 한 번 고정한다. 수집 창 동안 슬롯이 바뀔 일이
 # 없으므로(캐릭터는 LOBBY에서만 바꿀 수 있음) 매번 다시 계산할 필요가 없다.
 var transfer_hash_owners: Dictionary = {}
+
+# 2-5 후속(AWAITING_READY) - transfer_ready_peers: Dictionary{int -> true},
+# pack_ready를 보낸 슬롯 인덱스 집합. begin_transfer()에서 딱 한 번만
+# 비운다 - AWAITING_READY 진입 시점에 비우면 안 된다. 받을 팩이 없는
+# 클라이언트는 서버가 아직 COLLECTING 중일 때도 곧바로 pack_ready를 보낼
+# 수 있는데, 그 이른 도착을 나중에 지워버리면 그 슬롯은 영원히 준비
+# 안 된 것으로 남는다.
+var transfer_ready_peers: Dictionary = {}
+var transfer_ready_deadline_msec: int = 0
 
 
 func _init(room_code: String, player_count: int) -> void:
@@ -240,6 +260,8 @@ func begin_transfer(now_msec: int, collect_ms: int) -> void:
 	transfer_current_hash = ""
 	transfer_current_owner = -1
 	transfer_collect_until_msec = now_msec + collect_ms
+	transfer_ready_peers = {}
+	transfer_ready_deadline_msec = 0
 
 
 ## "owner_index 슬롯의 팩이 필요하다"는 클라이언트 요청을 기록한다. 클라이언트가
@@ -267,17 +289,21 @@ func is_collection_expired(now_msec: int) -> bool:
 
 
 ## 수집 창을 닫고 큐를 구성한다 - 실제로 요청이 들어온 해시만 큐에 오른다
-## (아무도 필요 없다고 한 해시를 전송할 이유는 없다).
+## (아무도 필요 없다고 한 해시를 전송할 이유는 없다). 큐가 비어도 바로
+## DONE이 아니라 AWAITING_READY로 간다 - 받을 팩이 하나도 없는 방(전원
+## 기본 캐릭터 등)도 예외 없이 pack_ready 확인 단계를 거친다(호출부가
+## begin_awaiting_ready()로 마감 시각을 잡아줘야 한다).
 func close_collection_and_build_queue() -> void:
 	transfer_queue = transfer_requesters.keys()
-	transfer_state = TransferState.DONE if transfer_queue.is_empty() else TransferState.TRANSFERRING_PACK
+	transfer_state = TransferState.TRANSFERRING_PACK if not transfer_queue.is_empty() else TransferState.AWAITING_READY
 
 
 ## 큐에서 다음 해시를 꺼내 진행 중 상태로 만들고 그 해시를 돌려준다. 큐가
-## 비어 있으면(전부 처리 완료) DONE으로 전환하고 빈 문자열을 돌려준다.
+## 비어 있으면(전부 처리 완료) AWAITING_READY로 전환하고 빈 문자열을
+## 돌려준다(호출부가 begin_awaiting_ready()로 마감 시각을 잡아줘야 한다).
 func start_next_transfer(now_msec: int) -> String:
 	if transfer_queue.is_empty():
-		transfer_state = TransferState.DONE
+		transfer_state = TransferState.AWAITING_READY
 		transfer_current_hash = ""
 		transfer_current_owner = -1
 		return ""
@@ -296,6 +322,35 @@ func current_transfer_recipients() -> Array:
 
 func is_current_transfer_timed_out(now_msec: int, timeout_ms: int) -> bool:
 	return transfer_state == TransferState.TRANSFERRING_PACK and now_msec - transfer_current_started_msec > timeout_ms
+
+
+## AWAITING_READY 진입 시 마감 시각을 잡는다. transfer_ready_peers는 여기서
+## 안 건드린다(begin_transfer()에서만 비움 - 위 필드 주석 참고).
+func begin_awaiting_ready(now_msec: int, timeout_ms: int) -> void:
+	transfer_ready_deadline_msec = now_msec + timeout_ms
+
+
+func mark_pack_ready(player_index: int) -> void:
+	transfer_ready_peers[player_index] = true
+
+
+## 지금 채워진 슬롯 전원이 pack_ready를 보냈는지. 슬롯이 비어있으면
+## (플레이어가 나갔으면) 그 자리는 검사 대상에서 빠진다.
+func all_players_pack_ready() -> bool:
+	for i in slots.size():
+		if slots[i] != null and not transfer_ready_peers.has(i):
+			return false
+	return true
+
+
+func is_pack_ready_timed_out(now_msec: int) -> bool:
+	return transfer_state == TransferState.AWAITING_READY and now_msec >= transfer_ready_deadline_msec
+
+
+## AWAITING_READY -> DONE. 전원 확인됐거나(all_players_pack_ready())
+## 대기 시간을 넘겨 포기했을 때(is_pack_ready_timed_out()) 호출부가 부른다.
+func mark_transfer_done() -> void:
+	transfer_state = TransferState.DONE
 
 
 func is_transfer_done() -> bool:

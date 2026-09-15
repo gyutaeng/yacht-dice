@@ -21,6 +21,16 @@ const CHUNK_PAYLOAD_BYTES := 32768
 # 여기 공유 파일에 둔다(HELLO_TIMEOUT_SECONDS와 같은 이유).
 const PACK_TRANSFER_TIMEOUT_MSEC := 60000
 
+# 2-5 후속(전송 완료를 "발송"이 아니라 "영수증"으로 확인) - 마지막 청크를
+# 네트워크로 보낸 것과, 받는 쪽이 그걸 실제로 검증·저장·프로필 확정까지
+# 끝낸 것은 다른 시점이다(웹 프리징 방지를 위해 파일마다 프레임을 쉬므로
+# 여러 프레임 걸림). 서버는 전원이 pack_ready를 보낼 때까지 game_started를
+# 미룬다 - 그 대기의 상한이 이 값이다. PACK_TRANSFER_TIMEOUT_MSEC(업로더가
+# 네트워크로 다 보낼 시간)과 의미가 달라서 재사용하지 않고 따로 둔다 -
+# 이건 이미 다운로드된 바이트를 로컬에서 푸는 시간이라 훨씬 빨리 끝나야
+# 정상이고, 나중에 실측해서 독립적으로 줄일 수 있어야 한다.
+const PACK_READY_TIMEOUT_MSEC := 60000
+
 # 닉네임(display_name)은 남의 화면에 그대로 뜨는 값이라 클라이언트가 보낸
 # 그대로 믿으면 안 된다(원칙 6). 상수/정리 함수를 여기 하나로 모아서
 # 클라이언트(scenes/online/online_screen.gd)와 서버(server_main.gd) 양쪽이
@@ -43,6 +53,11 @@ const MSG_REQUEST_SCORE := "request_score"
 # 2-5(캐릭터 팩 전송) §2단계 - client -> server.
 const MSG_REQUEST_CHARACTER_PACK := "request_character_pack"
 const MSG_UPLOAD_PACK_CHUNK := "upload_pack_chunk"
+
+# 2-5 후속 - "내가 받아야 할 팩을 전부 처리했다"는 영수증(성공/실패/애초에
+# 받을 게 없었음 전부 포함 - "더 기다릴 게 없다"는 뜻이지 "전부 성공했다"는
+# 뜻이 아니다). 서버는 방 전원에게서 이걸 받은 뒤에만 game_started를 보낸다.
+const MSG_PACK_READY := "pack_ready"
 
 # 서버 -> 클라이언트
 const MSG_HELLO_ACK := "hello_ack"

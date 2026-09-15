@@ -157,6 +157,10 @@ func upload_pack_chunk(hash: String, sequence: int, total_chunks: int, total_byt
 	_send(NetProtocol.MSG_UPLOAD_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "total_bytes": total_bytes, "data": data_base64})
 
 
+func send_pack_ready() -> void:
+	_send(NetProtocol.MSG_PACK_READY, {})
+
+
 func close() -> void:
 	_reset()
 

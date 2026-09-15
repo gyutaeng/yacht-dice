@@ -180,6 +180,8 @@ func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
 			_handle_request_character_pack(sender_id, payload)
 		NetProtocol.MSG_UPLOAD_PACK_CHUNK:
 			_handle_upload_pack_chunk(sender_id, payload)
+		NetProtocol.MSG_PACK_READY:
+			_handle_pack_ready(sender_id, payload)
 		NetProtocol.MSG_HELLO:
 			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
@@ -407,8 +409,12 @@ func _begin_transferring(room: Room) -> void:
 
 ## 매 프레임 TRANSFERRING 방들의 상태 기계를 진행시킨다(2-5 §2단계) - 수집
 ## 창이 끝났으면 큐를 만들고, 진행 중인 전송이 60초를 넘겼으면 포기하고
-## 다음으로 넘어간다. 로비가 영원히 멈추는 상황을 막는 핵심 로직이라 방
-## 하나가 막혀도 나머지 방에는 영향이 없도록 방마다 독립적으로 처리한다.
+## 다음으로 넘어간다. 큐가 다 비면 곧장 게임을 시작하지 않고
+## AWAITING_READY로 들어가 전원의 pack_ready를 기다린다(2-5 후속 - "마지막
+## 청크를 릴레이 큐에 넣었다"와 "받는 쪽이 그걸로 프로필까지 확정했다"는
+## 다른 시점이라, 전자만 보고 game_started를 보내면 검증이 덜 끝난 슬롯이
+## 실루엣으로 굳어버린다). 로비가 영원히 멈추는 상황을 막는 핵심 로직이라
+## 방 하나가 막혀도 나머지 방에는 영향이 없도록 방마다 독립적으로 처리한다.
 func _service_transferring_rooms(now: int) -> void:
 	for room in room_manager.rooms.values():
 		if room.state != Room.State.TRANSFERRING:
@@ -416,8 +422,8 @@ func _service_transferring_rooms(now: int) -> void:
 
 		if room.transfer_state == Room.TransferState.COLLECTING and room.is_collection_expired(now):
 			room.close_collection_and_build_queue()
-			if room.is_transfer_done():
-				_finish_transferring(room)
+			if room.transfer_state == Room.TransferState.AWAITING_READY:
+				room.begin_awaiting_ready(now, NetProtocol.PACK_READY_TIMEOUT_MSEC)
 			else:
 				_advance_transfer(room, now)
 			continue
@@ -426,17 +432,48 @@ func _service_transferring_rooms(now: int) -> void:
 			print("[서버] 방 %s: 해시 %s 전송이 %.0f초를 넘겨 포기함" % [room.code, room.transfer_current_hash, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC / 1000.0])
 			_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": room.transfer_current_hash, "reason": "timeout"})
 			_advance_transfer(room, now)
+			continue
+
+		if room.transfer_state == Room.TransferState.AWAITING_READY:
+			if room.all_players_pack_ready():
+				print("[서버][전송] 방 %s: 전원 pack_ready 확인" % room.code)
+				room.mark_transfer_done()
+				_finish_transferring(room)
+			elif room.is_pack_ready_timed_out(now):
+				print("[서버][전송] 방 %s: pack_ready 대기 시간(%.0f초) 초과 - 그냥 진행" % [room.code, NetProtocol.PACK_READY_TIMEOUT_MSEC / 1000.0])
+				room.mark_transfer_done()
+				_finish_transferring(room)
 
 
 ## 큐에서 다음 해시를 꺼내 전송을 시작하거나(방 전체에 pack_upload_requested
 ## 방송 - 소유자는 이걸 보고 업로드를 시작하고, 나머지는 "누구를 기다리는지"
-## UI를 갱신한다), 큐가 비었으면 게임을 시작한다.
+## UI를 갱신한다), 큐가 비었으면 AWAITING_READY로 들어간다(게임 시작은
+## _service_transferring_rooms()가 전원 확인/타임아웃을 본 뒤에 한다).
 func _advance_transfer(room: Room, now: int) -> void:
 	var next_hash := room.start_next_transfer(now)
 	if next_hash == "":
-		_finish_transferring(room)
+		room.begin_awaiting_ready(now, NetProtocol.PACK_READY_TIMEOUT_MSEC)
 		return
 	_broadcast_room(room, NetProtocol.MSG_PACK_UPLOAD_REQUESTED, {"hash": next_hash})
+
+
+## 클라이언트가 "내가 받아야 할 팩을 전부 처리했다"고 보내는 영수증(2-5
+## 후속). AWAITING_READY에 도달하기 전에(COLLECTING 등) 먼저 도착할 수
+## 있으므로(받을 팩이 아예 없는 클라이언트는 transferring_started를 받자마자
+## 보냄) transfer_state를 따지지 않고 방이 TRANSFERRING이기만 하면 받아준다 -
+## Room.mark_pack_ready()는 begin_transfer()에서 딱 한 번만 초기화되는
+## 집합에 기록하므로 이른 도착도 그대로 유효하다.
+func _handle_pack_ready(sender_id: int, _payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null or room.state != Room.State.TRANSFERRING:
+		return
+
+	var slot_index := room.find_slot_by_peer(sender_id)
+	if slot_index == -1:
+		return
+
+	room.mark_pack_ready(slot_index)
+	print("[서버][전송] 방 %s: 슬롯 %d pack_ready 수신" % [room.code, slot_index])
 
 
 ## game_started 다음에 game_state.start_turn()을 실제로 호출해서 첫 턴을
