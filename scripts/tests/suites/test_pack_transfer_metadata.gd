@@ -31,6 +31,16 @@ func run(r) -> void:
 	_test_awaiting_ready_timeout_lets_stragglers_go(r)
 	_test_awaiting_ready_ignores_empty_slots(r)
 
+	_test_stall_detection_not_stalled_right_after_start(r)
+	_test_stall_detection_stalled_after_no_activity(r)
+	_test_stall_detection_activity_resets_stall(r)
+	_test_stall_detection_not_applicable_outside_transferring_pack(r)
+
+	_test_recipients_for_hash_works_after_hash_is_no_longer_current(r)
+	_test_mark_chunk_resend_requested_allows_up_to_limit(r)
+	_test_mark_chunk_resend_requested_is_per_hash_and_per_requester(r)
+	_test_mark_chunk_resend_requested_resets_on_new_transfer(r)
+
 
 func _make_room_with_hashes(hashes: Array) -> Room:
 	var room := Room.new("TEST", hashes.size())
@@ -210,3 +220,92 @@ func _test_awaiting_ready_ignores_empty_slots(r) -> void:
 	room.mark_pack_ready(0)
 	room.mark_pack_ready(1)
 	r.expect_true("빈 슬롯(2번)은 확인 대상이 아니라 둘만 보내도 전원 확인 성공", room.all_players_pack_ready())
+
+
+func _test_stall_detection_not_stalled_right_after_start(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+	room.register_pack_request(1, 0)
+	room.close_collection_and_build_queue()
+	room.start_next_transfer(500)
+	r.expect_true("전송 시작 직후엔 멈춤 아님", not room.is_transfer_stalled(500, 5000))
+	r.expect_true("5초가 안 지났으면 멈춤 아님", not room.is_transfer_stalled(500 + 4999, 5000))
+
+
+func _test_stall_detection_stalled_after_no_activity(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+	room.register_pack_request(1, 0)
+	room.close_collection_and_build_queue()
+	room.start_next_transfer(500)
+	r.expect_true("진전 없이 5초가 지나면 멈춤으로 판정", room.is_transfer_stalled(500 + 5000, 5000))
+
+
+func _test_stall_detection_activity_resets_stall(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+	room.register_pack_request(1, 0)
+	room.close_collection_and_build_queue()
+	room.start_next_transfer(500)
+
+	room.mark_transfer_activity(4000, 2, 10)  # 청크 3/10이 4000ms 시점에 옴.
+	r.expect_true("방금 진전이 있었으면 멈춤 아님", not room.is_transfer_stalled(4000 + 4999, 5000))
+	r.expect_true("그 시점 기준으로 다시 5초가 지나야 멈춤", room.is_transfer_stalled(4000 + 5001, 5000))
+	r.expect_eq("마지막 청크 정보가 기록됨", room.transfer_last_chunk_sequence, 2)
+	r.expect_eq("총 청크 수도 기록됨", room.transfer_last_chunk_total, 10)
+
+
+func _test_stall_detection_not_applicable_outside_transferring_pack(r) -> void:
+	# AWAITING_READY 등 다른 단계에서는 "멈춤"이라는 개념 자체가 없다
+	# (기다리는 게 청크가 아니라 pack_ready이므로).
+	var room := _make_room_with_hashes(["", ""])
+	room.begin_transfer(0, 500)
+	room.close_collection_and_build_queue()  # 곧장 AWAITING_READY로.
+	r.expect_true("AWAITING_READY에서는 청크 멈춤 판정이 적용 안 됨", not room.is_transfer_stalled(999999, 5000))
+
+
+## 결측 청크 재전송(2-5 후속) - 서버가 다음 해시로 넘어간 뒤에도(더 이상
+## transfer_current_hash가 아니어도) 그 해시를 요청했던 사람 목록을 여전히
+## 조회할 수 있어야 재전송 릴레이가 가능하다.
+func _test_recipients_for_hash_works_after_hash_is_no_longer_current(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, HASH_B, ""])
+	room.begin_transfer(0, 500)
+	room.register_pack_request(2, 0)  # HASH_A 요청
+	room.register_pack_request(2, 1)  # HASH_B 요청
+	room.close_collection_and_build_queue()
+
+	var first_hash := room.start_next_transfer(500)
+	room.start_next_transfer(600)  # 큐가 다음 해시로 넘어감 - first_hash는 더 이상 current가 아님.
+
+	r.expect_eq("지나간 해시라도 요청자 목록을 그대로 조회 가능", room.recipients_for_hash(first_hash), [2])
+	r.expect_eq("모르는 해시는 빈 배열", room.recipients_for_hash("없는해시"), [])
+
+
+func _test_mark_chunk_resend_requested_allows_up_to_limit(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+
+	for i in NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH:
+		r.expect_true("상한(%d회) 전엔 허용됨(%d번째)" % [NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH, i + 1], room.mark_chunk_resend_requested(HASH_A, 1))
+	r.expect_true("상한을 넘으면 거부됨", not room.mark_chunk_resend_requested(HASH_A, 1))
+
+
+func _test_mark_chunk_resend_requested_is_per_hash_and_per_requester(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, HASH_B, ""])
+	room.begin_transfer(0, 500)
+
+	for i in NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH:
+		room.mark_chunk_resend_requested(HASH_A, 2)
+	r.expect_true("한 해시의 상한과 무관하게 다른 해시는 별도로 허용됨", room.mark_chunk_resend_requested(HASH_B, 2))
+	r.expect_true("같은 해시라도 다른 요청자는 별도로 허용됨", room.mark_chunk_resend_requested(HASH_A, 0))
+
+
+func _test_mark_chunk_resend_requested_resets_on_new_transfer(r) -> void:
+	var room := _make_room_with_hashes([HASH_A, ""])
+	room.begin_transfer(0, 500)
+	for i in NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH:
+		room.mark_chunk_resend_requested(HASH_A, 1)
+	r.expect_true("상한 도달 확인", not room.mark_chunk_resend_requested(HASH_A, 1))
+
+	room.begin_transfer(1000, 500)  # 새 전송 라운드 - 카운터가 초기화돼야 함.
+	r.expect_true("begin_transfer()로 카운터가 초기화됨", room.mark_chunk_resend_requested(HASH_A, 1))

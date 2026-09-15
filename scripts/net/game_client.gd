@@ -50,6 +50,9 @@ signal transferring_started()
 signal pack_upload_requested(hash: String)
 signal pack_chunk_received(hash: String, sequence: int, total_chunks: int, data_base64: String)
 signal pack_transfer_failed(hash: String, reason: String)
+## 결측 청크 재전송(2-5 후속) - 서버가 내 팩의 빠진 순번을 다시 보내달라고
+## 전달한다(방 전체 방송이 아니라 소유자인 나에게만 온다).
+signal pack_chunks_requested(hash: String, sequences: Array[int])
 
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
@@ -66,7 +69,15 @@ var _ever_connected := false
 # 버리지 않고 다음 프레임에 다시 시도한다 - poll()이 매 프레임 버퍼를
 # 비워주므로 결국은 다 나간다. 순서 보장을 위해 큐가 비어있을 때만 즉시
 # 전송을 시도하고, 그 외엔 항상 큐 맨 뒤에 붙인다(먼저 넣은 게 항상 먼저 나감).
-var _outgoing_queue: Array[PackedByteArray] = []
+#
+# 각 항목은 {"bytes": PackedByteArray, "on_sent": Callable}이다(2-5 후속 -
+# "put_packet에 성공한 시점"과 "큐에 넣은 시점"을 로그에서 구분해달라는
+# 요청). on_sent는 그 메시지가 실제로 put_packet()에 성공한 순간(즉시든,
+# 나중에 큐에서 빠져나갈 때든) 딱 한 번 호출된다 - 호출부가 이 안에서
+# "실제로 나갔다"는 로그를 남긴다. 이 프로젝트에서 "보냈다"를 "도착해서
+# 쓸 수 있다"로 착각한 사고가 이미 두 번 있었다(§8.5-1/§8.5-2) - 로그
+# 자체가 그 착각을 만들면 다음 사람이 또 같은 실수를 반복한다.
+var _outgoing_queue: Array = []
 
 # PROTOCOL_MISMATCH를 받으면 서버가 곧바로 연결을 끊는다(§2.0) - 그 직후의
 # 일반적인 disconnected 신호까지 같이 쏘면 UI가 "게임 버전이 다릅니다"
@@ -153,12 +164,23 @@ func request_character_pack(owner_index: int) -> void:
 	_send(NetProtocol.MSG_REQUEST_CHARACTER_PACK, {"owner_index": owner_index})
 
 
-func upload_pack_chunk(hash: String, sequence: int, total_chunks: int, total_bytes: int, data_base64: String) -> void:
-	_send(NetProtocol.MSG_UPLOAD_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "total_bytes": total_bytes, "data": data_base64})
+## 반환값(bool)은 즉시 전송됐는지(true) 아니면 큐에 들어갔는지(false)다 -
+## 호출부가 "큐 적재" 로그를 남기고 싶을 때 참고한다. 실제 "전송 완료"
+## 확인은 반환값이 아니라 on_sent 콜백으로 한다(즉시든 나중이든 정확히
+## 그 순간에 한 번만 불림).
+func upload_pack_chunk(hash: String, sequence: int, total_chunks: int, total_bytes: int, data_base64: String, on_sent: Callable = Callable()) -> bool:
+	return _send(NetProtocol.MSG_UPLOAD_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "total_bytes": total_bytes, "data": data_base64}, on_sent)
 
 
 func send_pack_ready() -> void:
 	_send(NetProtocol.MSG_PACK_READY, {})
+
+
+## 결측 청크 재전송(2-5 후속) - 빠진 순번을 지정해서 다시 보내달라고
+## 요청한다. 서버가 요청 횟수 상한을 독립적으로 강제하므로(원칙 6) 여기서는
+## 그대로 전송만 한다 - 상한은 호출부(PackTransferClient)가 미리 확인한다.
+func request_pack_chunks(hash: String, sequences: Array[int]) -> void:
+	_send(NetProtocol.MSG_REQUEST_PACK_CHUNKS, {"hash": hash, "sequences": sequences})
 
 
 func close() -> void:
@@ -180,24 +202,36 @@ func get_outgoing_queue_size() -> int:
 	return _outgoing_queue.size()
 
 
-func _send(type: String, payload: Dictionary) -> void:
+## 반환값(bool)은 즉시 put_packet()에 성공했는지다 - 큐에 들어갔으면 false.
+## on_sent가 유효하면, 실제로 put_packet()에 성공하는 그 순간(여기서
+## 즉시든, _flush_outgoing_queue()에서 나중이든) 딱 한 번 호출한다.
+func _send(type: String, payload: Dictionary, on_sent: Callable = Callable()) -> bool:
 	if _state == State.IDLE or _state == State.CONNECTING:
-		return
+		return false
 
 	var bytes := NetProtocol.encode(type, payload)
 	if not _outgoing_queue.is_empty():
-		_outgoing_queue.append(bytes)
-		return
+		_outgoing_queue.append({"bytes": bytes, "on_sent": on_sent})
+		return false
 
 	if _peer.put_packet(bytes) != OK:
-		_outgoing_queue.append(bytes)
+		_outgoing_queue.append({"bytes": bytes, "on_sent": on_sent})
+		return false
+
+	if on_sent.is_valid():
+		on_sent.call()
+	return true
 
 
 func _flush_outgoing_queue() -> void:
 	while not _outgoing_queue.is_empty():
-		if _peer.put_packet(_outgoing_queue[0]) != OK:
+		var entry: Dictionary = _outgoing_queue[0]
+		if _peer.put_packet(entry["bytes"]) != OK:
 			break
 		_outgoing_queue.pop_front()
+		var on_sent: Callable = entry.get("on_sent", Callable())
+		if on_sent.is_valid():
+			on_sent.call()
 
 
 ## GameEvents의 dice_rolled/game_ended는 Array[int]로 타입이 고정돼 있어서
@@ -270,6 +304,8 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 			pack_chunk_received.emit(str(payload.get("hash", "")), int(payload.get("sequence", -1)), int(payload.get("total_chunks", 0)), str(payload.get("data", "")))
 		NetProtocol.MSG_PACK_TRANSFER_FAILED:
 			pack_transfer_failed.emit(str(payload.get("hash", "")), str(payload.get("reason", "")))
+		NetProtocol.MSG_PACK_CHUNKS_REQUESTED:
+			pack_chunks_requested.emit(str(payload.get("hash", "")), _to_int_array(payload.get("sequences", [])))
 		NetProtocol.MSG_ERROR:
 			var code := str(payload.get("code", ""))
 			if code == NetProtocol.ERROR_PROTOCOL_MISMATCH:

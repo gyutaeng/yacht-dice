@@ -38,8 +38,18 @@ var _hello_confirmed: Dictionary = {}  # peer_id -> true
 # 2-5 전송 버그 수정 - game_client.gd의 같은 필드와 같은 이유(outbound_buffer_size
 # 기본값 65535바이트를 큰 청크 몇 개가 같은 프레임에 바로 넘긴다). 서버는
 # peer 하나가 여러 접속을 다루므로 접속(peer_id)마다 별도 큐를 둔다 - 한
-# 명에게 보낼 게 밀려도 다른 사람에게 보내는 건 영향받지 않는다.
-var _outgoing_queues: Dictionary = {}  # peer_id(int) -> Array[PackedByteArray]
+# 명에게 보낼 게 밀려도 다른 사람에게 보내는 건 영향받지 않는다. 각 항목은
+# {"bytes": PackedByteArray, "on_sent": Callable}(2-5 후속 - game_client.gd와
+# 같은 이유로 "큐에 넣음"과 "실제 put_packet() 성공"을 로그에서 구분한다).
+var _outgoing_queues: Dictionary = {}  # peer_id(int) -> Array[Dictionary]
+
+# 2-5 후속(청크 결측 조사) - 방 코드별로 "지금 릴레이 중인 해시가 전원에게
+# 실제로 다 나갔는지"를 추적한다. {"hash": String, "expected": int(총
+# 청크수 × 수신자수), "confirmed": int(실제 put_packet 성공 횟수),
+# "uploader_done": bool(소유자로부터 마지막 순번까지 받았는지)}. 예전엔
+# "소유자로부터 마지막 순번을 받았다"만 보고 "전송 완료"로 판정해서 다음
+# 해시로 넘어갔다 - 실제로 수신자들에게 다 나갔는지는 확인 안 하고 있었다.
+var _relay_confirm_state: Dictionary = {}  # room_code(String) -> Dictionary
 
 # GameEvents 릴레이(2-4) - 서버 프로세스 전체에 GameEvents 인스턴스가
 # 하나뿐이라 방마다 새로 구독하지 않는다. 지금 처리 중인 요청이 어느
@@ -182,6 +192,8 @@ func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
 			_handle_upload_pack_chunk(sender_id, payload)
 		NetProtocol.MSG_PACK_READY:
 			_handle_pack_ready(sender_id, payload)
+		NetProtocol.MSG_REQUEST_PACK_CHUNKS:
+			_handle_request_pack_chunks(sender_id, payload)
 		NetProtocol.MSG_HELLO:
 			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
@@ -428,11 +440,14 @@ func _service_transferring_rooms(now: int) -> void:
 				_advance_transfer(room, now)
 			continue
 
-		if room.transfer_state == Room.TransferState.TRANSFERRING_PACK and room.is_current_transfer_timed_out(now, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC):
-			print("[서버] 방 %s: 해시 %s 전송이 %.0f초를 넘겨 포기함" % [room.code, room.transfer_current_hash, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC / 1000.0])
-			_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": room.transfer_current_hash, "reason": "timeout"})
-			_advance_transfer(room, now)
-			continue
+		if room.transfer_state == Room.TransferState.TRANSFERRING_PACK:
+			if room.is_current_transfer_timed_out(now, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC):
+				print("[서버] 방 %s: 해시 %s 전송이 %.0f초를 넘겨 포기함" % [room.code, room.transfer_current_hash, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC / 1000.0])
+				_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": room.transfer_current_hash, "reason": "timeout"})
+				_relay_confirm_state.erase(room.code)
+				_advance_transfer(room, now)
+				continue
+			_warn_if_transfer_stalled(room, now)
 
 		if room.transfer_state == Room.TransferState.AWAITING_READY:
 			if room.all_players_pack_ready():
@@ -443,6 +458,29 @@ func _service_transferring_rooms(now: int) -> void:
 				print("[서버][전송] 방 %s: pack_ready 대기 시간(%.0f초) 초과 - 그냥 진행" % [room.code, NetProtocol.PACK_READY_TIMEOUT_MSEC / 1000.0])
 				room.mark_transfer_done()
 				_finish_transferring(room)
+
+
+## 멈춤 감지(사용자 신고 - 큰 팩에서 전송이 중간에 멈춤). 60초 타임아웃보다
+## 훨씬 짧은 TRANSFER_STALL_WARNING_SEC(5초)마다 한 번씩만 경고를 반복해서
+## 콘솔이 매 프레임 도배되지 않게 한다 - Room.mark_transfer_activity()가
+## 청크가 실제로 릴레이될 때마다 경고 타이머를 리셋해준다.
+func _warn_if_transfer_stalled(room: Room, now: int) -> void:
+	var stall_ms := int(NetProtocol.TRANSFER_STALL_WARNING_SEC * 1000)
+	if not room.is_transfer_stalled(now, stall_ms) or now < room.transfer_next_stall_warning_msec:
+		return
+
+	var stalled_sec := (now - room.transfer_last_chunk_msec) / 1000.0
+	var queue_info: Array[String] = []
+	for recipient_index in room.current_transfer_recipients():
+		var recipient_slot: Dictionary = room.slots[recipient_index]
+		if recipient_slot != null:
+			var peer_id: int = recipient_slot["peer_id"]
+			queue_info.append("peer %d 대기열 %d개" % [peer_id, _outgoing_queues.get(peer_id, []).size()])
+	print("[서버][전송][경고] 방 %s: %.0f초간 진전 없음 - 마지막 청크 %d/%d(해시=%s), %s" % [
+		room.code, stalled_sec, room.transfer_last_chunk_sequence + 1, room.transfer_last_chunk_total,
+		room.transfer_current_hash.substr(0, 8), ", ".join(queue_info) if not queue_info.is_empty() else "(수신자 없음)",
+	])
+	room.transfer_next_stall_warning_msec = now + stall_ms
 
 
 ## 큐에서 다음 해시를 꺼내 전송을 시작하거나(방 전체에 pack_upload_requested
@@ -509,20 +547,32 @@ func _handle_request_character_pack(sender_id: int, payload: Dictionary) -> void
 ## 지금 순번인 소유자가 보낸 청크를 그 해시를 요청한 수신자들에게 그대로
 ## 릴레이한다(서버는 전체 바이트를 버퍼링하지 않는다 - 해시 검증은 받는 쪽이
 ## 전부 받은 뒤 직접 한다). total_bytes가 상한을 넘으면 그 자리에서 포기하고
-## 다음 해시로 넘어간다 - 청크 개수만 믿지 않고 매 청크마다 검사한다(원칙 6,
-## 클라이언트가 total_bytes를 거짓으로 작게 보내고 실제로는 더 많은 청크를
-## 보내는 경우까지 막을 순 없지만, 그런 경우 마지막 청크 판정
-## (sequence == total_chunks-1)이 안 맞아 전송이 그냥 멈춘 채 타임아웃으로
-## 정리된다 - 게임 시작을 막지는 않는다).
+## 다음 해시로 넘어간다 - 청크 개수만 믿지 않고 매 청크마다 검사한다(원칙 6).
+##
+## "전송 완료" 판정(2-5 후속, 확실한 버그 수정): 예전엔 소유자로부터 마지막
+## 순번을 받은 시점에 곧바로 "완료"로 보고 다음 해시로 넘어갔다 - 이건
+## "소유자가 다 보냈다"일 뿐 "수신자 전원에게 실제로 나갔다"가 아니다(이
+## 프로젝트에서 "보냈다"를 "도착해서 쓸 수 있다"로 착각한 사고가 이미 두
+## 번 있었다 - §8.5-1/§8.5-2, 이게 세 번째였다). 이제 _relay_confirm_state로
+## "청크수 × 수신자수"만큼의 실제 put_packet() 성공을 다 셀 때까지 기다린
+## 뒤에야(_maybe_finish_relay) 다음 해시로 넘어간다.
+## 결측 청크 재전송(2-5 후속) - 받는 쪽이 결측을 알아챌 때쯤엔 서버가 이미
+## 다음 해시로 넘어가 있는 경우가 대부분이라(정상 경로), 소유자 검증/수신자
+## 조회를 "지금 진행 중인 해시"가 아니라 "그 해시의 진짜 소유자/요청자"
+## 기준으로 한다(room.transfer_hash_owners/recipients_for_hash - 둘 다
+## begin_transfer()에서만 초기화되어 지나간 해시에 대해서도 유효하다).
+## 지금 진행 중인 해시(is_current_hash)일 때만 _relay_confirm_state로
+## "전원에게 실제로 나갔는지"를 세어 다음 해시로 넘어갈지 판단한다 - 이미
+## 지나간 해시의 재전송은 그 판정에 전혀 관여하지 않고 그냥 릴레이만 한다.
 func _handle_upload_pack_chunk(sender_id: int, payload: Dictionary) -> void:
 	var room := room_manager.get_room_for_peer(sender_id)
-	if room == null or room.state != Room.State.TRANSFERRING or room.transfer_state != Room.TransferState.TRANSFERRING_PACK:
-		return
-	if room.find_slot_by_peer(sender_id) != room.transfer_current_owner:
+	if room == null or room.state != Room.State.TRANSFERRING:
 		return
 
 	var hash := str(payload.get("hash", ""))
-	if hash.is_empty() or hash != room.transfer_current_hash:
+	if hash.is_empty() or not room.transfer_hash_owners.has(hash):
+		return
+	if room.find_slot_by_peer(sender_id) != room.transfer_hash_owners[hash]:
 		return
 
 	var sequence = _payload_int(payload, "sequence")
@@ -533,31 +583,129 @@ func _handle_upload_pack_chunk(sender_id: int, payload: Dictionary) -> void:
 	if total_chunks <= 0 or sequence < 0 or sequence >= total_chunks:
 		return
 
-	if total_bytes > CharacterLimits.TOTAL_WARNING_BYTES:
+	var is_current_hash := hash == room.transfer_current_hash and room.transfer_state == Room.TransferState.TRANSFERRING_PACK
+
+	if is_current_hash and total_bytes > CharacterLimits.TOTAL_WARNING_BYTES:
 		print("[서버][전송] 방 %s: 해시 %s가 상한(%s)을 넘어 전송을 포기함" % [room.code, hash, CharacterLimits.format_bytes(CharacterLimits.TOTAL_WARNING_BYTES)])
 		_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": hash, "reason": "oversized"})
+		_relay_confirm_state.erase(room.code)
 		_advance_transfer(room, Time.get_ticks_msec())
 		return
 
-	# 2-5 전송 진단(청크가 "안 감"과 "왔는데 안 나감"을 구분하기 위함) -
-	# 웹 클라이언트는 브라우저 콘솔이 안 보이므로 이 print()는 항상 서버
-	# 콘솔(헤드리스 네이티브 프로세스)에만 찍힌다. 클라이언트 쪽 진단은
-	# online_screen.gd의 화면 로그(BuildInfo.DEBUG_MODE) 참고.
-	var recipients := room.current_transfer_recipients()
-	print("[서버][전송] 청크 수신 %d/%d(해시=%s, %d바이트) - 수신자 %d명에게 릴레이" % [sequence + 1, total_chunks, hash.substr(0, 8), total_bytes, recipients.size()])
+	# 2-5 전송 진단(보내는 쪽/서버/받는 쪽 세 로그를 대조해 어디서 막혔는지
+	# 가리기 위함) - 웹 클라이언트는 브라우저 콘솔이 안 보이므로 이 print()는
+	# 항상 서버 콘솔(헤드리스 네이티브 프로세스)에만 찍힌다. 클라이언트 쪽
+	# 진단은 online_screen.gd의 화면 로그(BuildInfo.DEBUG_MODE) 참고.
+	var recipients := room.recipients_for_hash(hash)
+	if is_current_hash:
+		print("[서버][전송] 청크 수신 %d/%d(해시=%s, %d바이트, 소유자로부터 도착)" % [sequence + 1, total_chunks, hash.substr(0, 8), total_bytes])
+		room.mark_transfer_activity(Time.get_ticks_msec(), sequence, total_chunks)
+	else:
+		print("[서버][전송] 재전송 청크 수신 %d/%d(해시=%s, %d바이트) - 지나간 해시라 진행 판정에는 영향 없음" % [sequence + 1, total_chunks, hash.substr(0, 8), total_bytes])
+
+	var state: Dictionary = {}
+	if is_current_hash:
+		state = _relay_confirm_state.get(room.code, {})
+		if state.get("hash", "") != hash:
+			state = {"hash": hash, "expected": total_chunks * recipients.size(), "confirmed": 0, "uploader_done": false}
+		_relay_confirm_state[room.code] = state
 
 	var data := str(payload.get("data", ""))
 	for recipient_index in recipients:
 		var recipient_slot: Dictionary = room.slots[recipient_index]
-		if recipient_slot != null:
-			_send(recipient_slot["peer_id"], NetProtocol.MSG_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "data": data})
-			var queued: int = _outgoing_queues.get(recipient_slot["peer_id"], []).size()
-			if queued > 0:
-				print("[서버][전송] peer %d에게 보낼 청크가 밀림(대기열 %d개) - outbound_buffer_size 한계, 다음 프레임에 재시도" % [recipient_slot["peer_id"], queued])
+		if recipient_slot == null:
+			continue
+		var peer_id: int = recipient_slot["peer_id"]
+		var seq_display: int = sequence + 1
+		var room_code: String = room.code
+		var confirm_current := is_current_hash
+		var on_sent := func() -> void:
+			if confirm_current:
+				print("[서버][전송] 청크 %d/%d 실제 송신 완료 → peer %d(해시=%s)" % [seq_display, total_chunks, peer_id, hash.substr(0, 8)])
+				_mark_relay_confirmed(room_code, hash)
+			else:
+				print("[서버][전송] 재전송 청크 %d/%d 실제 송신 완료 → peer %d(해시=%s)" % [seq_display, total_chunks, peer_id, hash.substr(0, 8)])
+		var sent_now := _send(peer_id, NetProtocol.MSG_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "data": data}, on_sent)
+		if not sent_now:
+			print("[서버][전송] 청크 %d/%d peer %d에게 큐 적재(대기열 %d개) - 실제 전송은 나중에 위 '실제 송신 완료' 로그로 확인" % [seq_display, total_chunks, peer_id, _outgoing_queues.get(peer_id, []).size()])
 
-	if sequence == total_chunks - 1:
-		print("[서버][전송] 해시 %s 전송 완료(마지막 청크 %d/%d) - 다음 해시로 진행" % [hash.substr(0, 8), sequence + 1, total_chunks])
-		_advance_transfer(room, Time.get_ticks_msec())
+	if is_current_hash:
+		if sequence == total_chunks - 1:
+			state["uploader_done"] = true
+			_relay_confirm_state[room.code] = state
+		_maybe_finish_relay(room, state)
+
+
+## 결측 청크 재전송(2-5 후속) - 받는 쪽이 빠진 순번을 지정해 재전송을
+## 요청하면, 서버는 바이트를 들고 있지 않으므로(§8.4 - 전체 바이트를
+## 버퍼링하지 않는 설계를 그대로 유지) 그 해시의 소유자에게만 전달한다
+## (방 전체 방송 아님 - 소유자 본인 외엔 이 정보로 할 일이 없다). 요청
+## 횟수 상한은 Room.mark_chunk_resend_requested()가 독립적으로 강제한다
+## (원칙 6 - 클라이언트 자체 상한을 그대로 믿지 않는다).
+func _handle_request_pack_chunks(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null or room.state != Room.State.TRANSFERRING:
+		return
+
+	var hash := str(payload.get("hash", ""))
+	if hash.is_empty() or not room.transfer_hash_owners.has(hash):
+		return
+
+	var requester_index := room.find_slot_by_peer(sender_id)
+	if requester_index == -1:
+		return
+
+	var sequences_raw = payload.get("sequences")
+	if typeof(sequences_raw) != TYPE_ARRAY or sequences_raw.is_empty():
+		return
+
+	var sequences: Array = []
+	for value in sequences_raw:
+		if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+			continue
+		var seq := int(value)
+		if seq >= 0 and not sequences.has(seq):
+			sequences.append(seq)
+	if sequences.is_empty():
+		return
+
+	if not room.mark_chunk_resend_requested(hash, requester_index):
+		print("[서버][전송] 방 %s: 슬롯 %d의 해시 %s 재전송 요청이 상한(%d회)을 넘어 무시함" % [room.code, requester_index, hash.substr(0, 8), NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH])
+		return
+
+	var owner_index: int = room.transfer_hash_owners[hash]
+	if owner_index < 0 or owner_index >= room.slots.size() or room.slots[owner_index] == null:
+		return
+
+	print("[서버][전송] 방 %s: 슬롯 %d가 해시 %s의 청크 %s 재전송 요청" % [room.code, requester_index, hash.substr(0, 8), sequences])
+	_send(room.slots[owner_index]["peer_id"], NetProtocol.MSG_PACK_CHUNKS_REQUESTED, {"hash": hash, "sequences": sequences})
+
+
+## _send()/_flush_outgoing_queues()가 청크 하나의 put_packet()이 실제로
+## 성공했을 때 부르는 콜백 - 확인 카운트를 올리고 전부 다 됐는지 본다.
+func _mark_relay_confirmed(room_code: String, hash: String) -> void:
+	var room := room_manager.get_room(room_code)
+	if room == null:
+		return
+	var state: Dictionary = _relay_confirm_state.get(room_code, {})
+	if state.get("hash", "") != hash:
+		return  # 이미 다음 해시로 넘어간 뒤 뒤늦게 확인된 것 - 무시.
+	state["confirmed"] = state.get("confirmed", 0) + 1
+	_relay_confirm_state[room_code] = state
+	_maybe_finish_relay(room, state)
+
+
+## 소유자로부터 마지막 순번까지 받았고(uploader_done), 그 청크들이 수신자
+## 전원에게 실제로 다 나간 것(confirmed >= expected)까지 확인되면 그때
+## 다음 해시로 넘어간다.
+func _maybe_finish_relay(room: Room, state: Dictionary) -> void:
+	if not state.get("uploader_done", false):
+		return
+	if state.get("confirmed", 0) < state.get("expected", 0):
+		return
+	print("[서버][전송] 해시 %s 전송 완료 확인(청크×수신자 %d개 전부 실제 송신됨) - 다음 해시로 진행" % [str(state.get("hash", "")).substr(0, 8), state.get("expected", 0)])
+	_relay_confirm_state.erase(room.code)
+	_advance_transfer(room, Time.get_ticks_msec())
 
 
 func _handle_request_roll(sender_id: int, _payload: Dictionary) -> void:
@@ -732,22 +880,31 @@ func _payload_int(payload: Dictionary, key: String) -> Variant:
 ## 수동 테스트 중 발견했다. 크래시는 아니지만(엔진이 ERROR 로그만 남기고
 ## 계속 진행) 콘솔이 지저분해지므로, 보내기 전에 그 peer의 소켓이 아직
 ## 열려 있는지 먼저 확인한다.
-func _send(peer_id: int, type: String, payload: Dictionary) -> void:
+## 반환값(bool)은 즉시 put_packet()에 성공했는지다(큐에 들어갔으면 false).
+## on_sent가 유효하면, 실제로 put_packet()에 성공하는 순간(여기서
+## 즉시든, _flush_outgoing_queues()에서 나중이든) 딱 한 번 호출한다 - 2-5
+## 후속: "큐에 넣었다"를 "보냈다"로 찍던 로그를 실제 확인 시점으로 고친다.
+func _send(peer_id: int, type: String, payload: Dictionary, on_sent: Callable = Callable()) -> bool:
 	var ws_peer := peer.get_peer(peer_id)
 	if ws_peer == null or ws_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		return
+		return false
 
 	var bytes := NetProtocol.encode(type, payload)
 	var queue: Array = _outgoing_queues.get(peer_id, [])
 	if not queue.is_empty():
-		queue.append(bytes)
+		queue.append({"bytes": bytes, "on_sent": on_sent})
 		_outgoing_queues[peer_id] = queue
-		return
+		return false
 
 	peer.set_target_peer(peer_id)
 	if peer.put_packet(bytes) != OK:
-		queue.append(bytes)
+		queue.append({"bytes": bytes, "on_sent": on_sent})
 		_outgoing_queues[peer_id] = queue
+		return false
+
+	if on_sent.is_valid():
+		on_sent.call()
+	return true
 
 
 ## _send()가 못 내보내고 큐에 쌓아둔 메시지를 매 프레임 다시 시도한다(2-5
@@ -764,9 +921,13 @@ func _flush_outgoing_queues() -> void:
 
 		peer.set_target_peer(peer_id)
 		while not queue.is_empty():
-			if peer.put_packet(queue[0]) != OK:
+			var entry: Dictionary = queue[0]
+			if peer.put_packet(entry["bytes"]) != OK:
 				break
 			queue.pop_front()
+			var on_sent: Callable = entry.get("on_sent", Callable())
+			if on_sent.is_valid():
+				on_sent.call()
 
 		if queue.is_empty():
 			_outgoing_queues.erase(peer_id)

@@ -71,6 +71,22 @@ var transfer_hash_owners: Dictionary = {}
 var transfer_ready_peers: Dictionary = {}
 var transfer_ready_deadline_msec: int = 0
 
+# 멈춤 감지(2-5 후속 - 사용자 신고: 큰 팩에서 전송이 중간에 멈춤) -
+# transfer_current_started_msec("이 해시 전송을 언제 시작했나")와 달리
+# 이건 "마지막으로 청크가 실제로 오간 게 언제인가"다. 청크가 오는 동안은
+# 계속 갱신되고, 멈추면 이 값이 정지해서 경과 시간이 늘어난다.
+var transfer_last_chunk_msec: int = 0
+var transfer_last_chunk_sequence: int = -1
+var transfer_last_chunk_total: int = 0
+var transfer_next_stall_warning_msec: int = 0
+
+# 결측 청크 재전송(2-5 후속) - "해시:요청자" 조합별 요청 횟수. 클라이언트의
+# 자체 상한(NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH)을 서버가 그대로
+# 믿지 않고 독립적으로 다시 강제한다(원칙 6). begin_transfer()에서만 비운다 -
+# 이미 지나간 해시의 요청 횟수도 그 방의 전송이 끝날 때까지는 유지돼야
+# 상한이 의미가 있다.
+var transfer_resend_request_counts: Dictionary = {}
+
 
 func _init(room_code: String, player_count: int) -> void:
 	code = room_code
@@ -262,6 +278,7 @@ func begin_transfer(now_msec: int, collect_ms: int) -> void:
 	transfer_collect_until_msec = now_msec + collect_ms
 	transfer_ready_peers = {}
 	transfer_ready_deadline_msec = 0
+	transfer_resend_request_counts = {}
 
 
 ## "owner_index 슬롯의 팩이 필요하다"는 클라이언트 요청을 기록한다. 클라이언트가
@@ -312,16 +329,55 @@ func start_next_transfer(now_msec: int) -> String:
 	transfer_current_owner = transfer_hash_owners.get(transfer_current_hash, -1)
 	transfer_current_started_msec = now_msec
 	transfer_state = TransferState.TRANSFERRING_PACK
+	transfer_last_chunk_msec = now_msec
+	transfer_last_chunk_sequence = -1
+	transfer_last_chunk_total = 0
+	transfer_next_stall_warning_msec = 0
 	return transfer_current_hash
 
 
 ## 지금 전송 중인 해시를 요청했던 플레이어 인덱스 목록(pack_chunk를 받을 대상).
 func current_transfer_recipients() -> Array:
-	return transfer_requesters.get(transfer_current_hash, [])
+	return recipients_for_hash(transfer_current_hash)
+
+
+## 결측 청크 재전송(2-5 후속) - 어떤 해시든(지금 처리 중이 아니라 이미
+## 큐를 지나간 해시라도) 그 해시를 요청했던 플레이어 인덱스 목록을 돌려준다.
+## transfer_requesters는 begin_transfer()에서만 비워지므로 지나간 해시의
+## 요청자 목록도 그대로 남아있다.
+func recipients_for_hash(pack_hash: String) -> Array:
+	return transfer_requesters.get(pack_hash, [])
+
+
+## 결측 청크 재전송(2-5 후속) - "해시:요청자" 조합이 상한
+## (NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH) 안이면 카운트를 올리고
+## true, 이미 상한을 넘겼으면 카운트를 건드리지 않고 false를 돌려준다.
+## 호출부(server_main.gd)는 false면 요청을 조용히 무시한다.
+func mark_chunk_resend_requested(pack_hash: String, requester_index: int) -> bool:
+	var key := "%s:%d" % [pack_hash, requester_index]
+	var count: int = transfer_resend_request_counts.get(key, 0)
+	if count >= NetProtocol.MAX_CHUNK_RESEND_REQUESTS_PER_HASH:
+		return false
+	transfer_resend_request_counts[key] = count + 1
+	return true
 
 
 func is_current_transfer_timed_out(now_msec: int, timeout_ms: int) -> bool:
 	return transfer_state == TransferState.TRANSFERRING_PACK and now_msec - transfer_current_started_msec > timeout_ms
+
+
+## 멈춤 감지(사용자 신고 - 큰 팩에서 중간에 멈춤) - server_main.gd가 청크를
+## 하나 릴레이할 때마다 불러서 "마지막 진전 시각"을 갱신한다. 새 경고를
+## 다시 받을 수 있게 stall_warning 타이머도 같이 초기화한다.
+func mark_transfer_activity(now_msec: int, sequence: int, total_chunks: int) -> void:
+	transfer_last_chunk_msec = now_msec
+	transfer_last_chunk_sequence = sequence
+	transfer_last_chunk_total = total_chunks
+	transfer_next_stall_warning_msec = 0
+
+
+func is_transfer_stalled(now_msec: int, stall_ms: int) -> bool:
+	return transfer_state == TransferState.TRANSFERRING_PACK and now_msec - transfer_last_chunk_msec >= stall_ms
 
 
 ## AWAITING_READY 진입 시 마감 시각을 잡는다. transfer_ready_peers는 여기서

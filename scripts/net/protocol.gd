@@ -31,6 +31,32 @@ const PACK_TRANSFER_TIMEOUT_MSEC := 60000
 # 정상이고, 나중에 실측해서 독립적으로 줄일 수 있어야 한다.
 const PACK_READY_TIMEOUT_MSEC := 60000
 
+# 멈춤 감지(사용자 신고 - 큰 팩에서 전송이 중간에 멈춤) - 보내는 쪽/받는
+# 쪽/서버 셋 다 "마지막으로 진전이 있었던 시각"을 기록해뒀다가 이 시간
+# 이상 안 움직이면 화면/콘솔에 경고를 남긴다. 60초 전송 타임아웃보다 훨씬
+# 짧게 잡아서(5초) "느린 것"과 "완전히 멈춘 것"을 구분하는 조기 경보로
+# 쓴다 - 타임아웃 자체를 대체하지 않는다(그건 그대로 60초 뒤에 포기하고
+# 기본 캐릭터로 넘어감).
+const TRANSFER_STALL_WARNING_SEC := 5.0
+
+# 2-5 후속(확실한 버그 수정) - online_screen.gd가 game_started를 받았는데
+# PackTransferClient에 아직 처리 중인 해시가 남아있으면 기다리는 방어선
+# (wait_until_all_resolved())에 상한이 없었다 - 청크 하나가 영영 안 와서
+# _on_pack_chunk_received()의 "전부 모였는지" 검사가 계속 실패하면
+# 클라이언트가 게임 화면으로 영원히 못 넘어갔다. 서버는 이미 PACK_READY_TIMEOUT_MSEC
+# (60초)를 기다린 뒤에야 game_started를 보내므로, 그 이후에 클라이언트가
+# 또 60초를 기다리는 건 의미가 없다 - 훨씬 짧게 잡고, 넘기면 남은 해시를
+# 강제로 포기(기본 캐릭터로 대체)하고 진행한다.
+const LOCAL_PACK_RESOLVE_TIMEOUT_MSEC := 10000
+
+# 2-5 후속(결측 청크 단위 재전송) - 청크 하나가 사라져도 팩 전체(최대
+# 15MB)를 포기하지 않고, 받는 쪽이 멈춤을 감지했을 때(TRANSFER_STALL_WARNING_SEC
+# 주기) 빠진 순번만 지정해서 다시 요청한다. 두 값 다 "무한 반복 방지"용
+# 상한이고, 서로 독립적으로 강제된다(클라이언트 자체 제한을 서버가 그대로
+# 믿지 않는다 - 원칙 6) - 클라이언트가 상한을 넘기면 더 요청하지 않고
+# 기존 로컬/서버 타임아웃이 그대로 이어받아 기본 캐릭터로 넘어간다.
+const MAX_CHUNK_RESEND_REQUESTS_PER_HASH := 3
+
 # 닉네임(display_name)은 남의 화면에 그대로 뜨는 값이라 클라이언트가 보낸
 # 그대로 믿으면 안 된다(원칙 6). 상수/정리 함수를 여기 하나로 모아서
 # 클라이언트(scenes/online/online_screen.gd)와 서버(server_main.gd) 양쪽이
@@ -58,6 +84,11 @@ const MSG_UPLOAD_PACK_CHUNK := "upload_pack_chunk"
 # 받을 게 없었음 전부 포함 - "더 기다릴 게 없다"는 뜻이지 "전부 성공했다"는
 # 뜻이 아니다). 서버는 방 전원에게서 이걸 받은 뒤에만 game_started를 보낸다.
 const MSG_PACK_READY := "pack_ready"
+
+# 2-5 후속(결측 청크 단위 재전송) - 특정 순번들이 안 왔을 때 그것만 다시
+# 보내달라는 요청. 서버는 이 요청을 방 전체에 방송하지 않고 그 해시의
+# 소유자에게만 전달한다(MSG_PACK_CHUNKS_REQUESTED, 아래).
+const MSG_REQUEST_PACK_CHUNKS := "request_pack_chunks"
 
 # 서버 -> 클라이언트
 const MSG_HELLO_ACK := "hello_ack"
@@ -102,6 +133,11 @@ const MSG_TRANSFERRING_STARTED := "transferring_started"
 const MSG_PACK_UPLOAD_REQUESTED := "pack_upload_requested"
 const MSG_PACK_CHUNK := "pack_chunk"
 const MSG_PACK_TRANSFER_FAILED := "pack_transfer_failed"
+
+# 2-5 후속(결측 청크 단위 재전송) - MSG_REQUEST_PACK_CHUNKS를 소유자에게만
+# 전달하는 메시지(위 MSG_PACK_UPLOAD_REQUESTED 등과 달리 방 전체 방송이
+# 아니다 - 소유자 본인 외에는 이 정보로 할 일이 없다).
+const MSG_PACK_CHUNKS_REQUESTED := "pack_chunks_requested"
 
 # 문서(§2.0/§4/§7)에 이름이 있는 에러 코드.
 const ERROR_PROTOCOL_MISMATCH := "PROTOCOL_MISMATCH"

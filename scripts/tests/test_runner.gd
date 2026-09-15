@@ -34,6 +34,7 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_online_game_controller.gd"),
 	preload("res://scripts/tests/suites/test_game_event_relay_classification.gd"),
 	preload("res://scripts/tests/suites/test_pack_transfer_metadata.gd"),
+	preload("res://scripts/tests/suites/test_pack_transfer_resolve_timeout.gd"),
 ]
 
 
