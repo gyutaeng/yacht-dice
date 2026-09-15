@@ -2,10 +2,12 @@ extends Node
 
 # ============================================================
 # 개발용 단축키 — 정식 빌드에는 절대 들어가면 안 된다.
-# BuildInfo.DEBUG_MODE가 false면 _ready()에서 자기 자신을 즉시 지워버려서,
-# 이 값이 false인 빌드에는 이 노드 자체가(키보드 단축키도 아래 디버그 버튼도)
-# 남지 않는다. 에디터냐 export냐는 안 따진다 - DEBUG_MODE 하나로 통일했다
-# (build_info.gd 참고). 정식 배포 전에는 반드시 그 값을 false로 되돌릴 것.
+# BuildInfo.DEBUG_MODE가 false면 _ready()도 _input()도 아무 것도 안 해서,
+# 키보드 단축키도 화면의 디버그 버튼도 전혀 안 나타난다. 노드 자체는 지우지
+# 않고 그대로 트리에 남겨둔다 - Main.gd가 @onready로 들고 있는 참조가 나중에
+# (예: greeting_active 갱신) 계속 유효해야 하기 때문이다. 에디터냐 export냐는
+# 안 따진다 - DEBUG_MODE 하나로 통일했다(build_info.gd 참고). 정식 배포
+# 전에는 반드시 그 값을 false로 되돌릴 것.
 #
 # 전부 Ctrl+Shift 조합을 쓴다 — F8/F9/F10/F11 등 단독 기능키는 Godot 에디터
 # 자신의 중지/단계 실행 단축키와 겹쳐서, 게임 창에 포커스가 있어도 에디터가
@@ -39,11 +41,23 @@ extends Node
 # 버튼으로 확실하게 누른다.
 # ============================================================
 
+# CharacterLimits는 이 파일 작성 시점에 막 추가된 class_name이라, 전역 스크립트
+# 클래스 캐시가 아직 못 봤을 수 있는 배포 환경을 대비해 preload로 직접 참조한다.
+const CharacterLimitsScript = preload("res://scripts/characters/character_limits.gd")
+
 var game_state: GameState
 
 # 자동 진행 중인지. Main.gd가 이 플래그를 보고 special_hand_rolled 연출을
 # 건너뛴다 — 안 그러면 48턴짜리 자동 진행이 매번 1.5초씩 멈춰서 너무 느려진다.
 var is_auto_playing: bool = false
+
+# 반대 방향 플래그 - Main.gd가 게임 시작 인사 연출(1-4C) 중에 true로 세팅한다.
+# DEBUG_MODE가 켜진 채로 테스트하는 동안 인사 연출 중 실수로 [끝까지 진행]
+# 등을 눌러서 게임 상태가 연출과 어긋나게 꼬이는 걸 막는다 - 그런 상태를
+# 진짜 버그로 착각하기 쉽다.
+var greeting_active: bool = false
+
+var _cache_stats_label: Label
 
 const KEY_ACTIONS := {
 	KEY_1: "force_yacht",
@@ -86,12 +100,20 @@ const BUTTON_LABELS := {
 
 func _ready() -> void:
 	if not BuildInfo.DEBUG_MODE:
-		queue_free()
 		return
 	_build_debug_button_panel()
 
 
 func _input(event: InputEvent) -> void:
+	# 예전엔 DEBUG_MODE가 false면 이 노드 자체를 queue_free()했는데, Main.gd가
+	# 들고 있는 @onready var debug_hotkeys 참조가 그 뒤로도 살아있어서(같은
+	# 프레임 안에서는 아직 안 지워짐) 나중에 그 참조를 건드리면(예:
+	# is_auto_playing 읽기) "이미 해제된 인스턴스" 오류가 날 수 있었다 -
+	# DEBUG_MODE=false 조합이 이번 세션 내내 한 번도 실제로 테스트된 적이
+	# 없어서 잠복해 있던 버그다. 이제는 노드를 지우지 않고 그냥 아무 것도
+	# 안 하게만 만든다 - 참조는 항상 유효하게 남는다.
+	if not BuildInfo.DEBUG_MODE:
+		return
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	if not (event.ctrl_pressed and event.shift_pressed):
@@ -111,6 +133,10 @@ func _input(event: InputEvent) -> void:
 ## 키보드 단축키와 디버그 버튼이 공유하는 실제 동작. 어느 쪽으로 들어와도
 ## 완전히 같은 경로를 타게 해서 "버튼이 키와 다르게 동작"하는 일이 없게 한다.
 func _perform_action(action: String) -> void:
+	if greeting_active:
+		print("[디버그] 게임 시작 인사 연출 중이라 무시함 - %s" % action)
+		return
+
 	print(ACTION_LOGS[action])
 
 	if game_state == null:
@@ -160,6 +186,22 @@ func _build_debug_button_panel() -> void:
 	vbox.add_theme_constant_override("separation", 4)
 	layer.add_child(vbox)
 
+	# AssetLoader의 디코딩 캐시가 실제로 얼마나 찼는지 눈으로 보기 위한
+	# 표시. 캐릭터를 여러 개 바꿔가며 볼 때(1-8 웹 테스트) 메모리 상한
+	# 조정이 필요한지 실측하려고 넣었다 - 1초마다 갱신하면 충분하다
+	# (매 프레임 갱신할 이유가 없음).
+	_cache_stats_label = Label.new()
+	_cache_stats_label.add_theme_font_size_override("font_size", 12)
+	_cache_stats_label.modulate = Color(1.0, 1.0, 0.6)
+	vbox.add_child(_cache_stats_label)
+	_update_cache_stats_label()
+
+	var stats_timer := Timer.new()
+	stats_timer.wait_time = 1.0
+	stats_timer.autostart = true
+	stats_timer.timeout.connect(_update_cache_stats_label)
+	add_child(stats_timer)
+
 	for action: String in KEY_ACTIONS.values():
 		var btn := Button.new()
 		btn.text = BUTTON_LABELS[action]
@@ -168,6 +210,14 @@ func _build_debug_button_panel() -> void:
 		btn.focus_mode = Control.FOCUS_NONE  # 눌러도 텍스트 입력 포커스를 뺏지 않게.
 		btn.pressed.connect(_perform_action.bind(action))
 		vbox.add_child(btn)
+
+
+func _update_cache_stats_label() -> void:
+	var stats := AssetLoader.get_cache_stats()
+	_cache_stats_label.text = "캐시: 이미지 %d개/%s, 오디오 %d개/%s" % [
+		stats["texture_count"], CharacterLimitsScript.format_bytes(stats["texture_bytes"]),
+		stats["audio_count"], CharacterLimitsScript.format_bytes(stats["audio_bytes"]),
+	]
 
 
 func _focus_is_text_input() -> bool:

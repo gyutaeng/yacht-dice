@@ -21,7 +21,9 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_character_library.gd"),
 	preload("res://scripts/tests/suites/test_character_pack.gd"),
 	preload("res://scripts/tests/suites/test_character_limits.gd"),
+	preload("res://scripts/tests/suites/test_asset_loader.gd"),
 	preload("res://scripts/tests/suites/test_character_editor_scene.gd"),
+	preload("res://scripts/tests/suites/test_debug_log.gd"),
 	preload("res://scripts/tests/suites/test_game_start_builtin_only.gd"),
 ]
 

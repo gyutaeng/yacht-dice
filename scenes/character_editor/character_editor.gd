@@ -223,8 +223,22 @@ func _on_export_unsaved_confirmed() -> void:
 ## 브라우저 다운로드를 띄우고(사용자가 이미 [내보내기]를 눌렀으므로 추가
 ## 확인 없이 바로 진행해도 됨), 데스크톱은 저장 위치를 물어야 하므로
 ## FileDialog를 띄운다(실제 쓰기는 _on_export_save_path_selected에서).
+##
+## export_pack_bytes()는 zip 압축이 끝날 때까지 동기로 막힌다. 버튼 문구를
+## "내보내는 중..."으로 바꾸고 한 프레임을 기다린 뒤에 실제 압축을 시작한다 -
+## 안 그러면 문구가 바뀌었다는 사실 자체가 화면에 그려지기 전에 멈춰서,
+## 사용자에게는 그냥 버튼이 안 눌린 것처럼 보인다.
 func _export_current_profile() -> void:
+	var original_text := _export_button.text
+	_export_button.disabled = true
+	_export_button.text = "내보내는 중..."
+	await get_tree().process_frame
+
 	var zip_bytes := CharacterLibrary.export_pack_bytes(_current_profile)
+
+	_export_button.text = original_text
+	_export_button.disabled = (_current_profile == null)
+
 	if zip_bytes.is_empty():
 		_show_storage_warning()
 		return
@@ -264,11 +278,22 @@ func _start_import() -> void:
 	_import_picker.pick_files(["zip"], false)
 
 
+## import_pack()은 zip 해제/검증이 끝날 때까지 동기로 막힌다(최대 50MB) -
+## export와 같은 이유로 버튼 문구를 바꾸고 한 프레임 기다린 뒤에 시작한다.
 func _on_import_files_picked(files: Array) -> void:
 	if files.is_empty():
 		return  # 확장자 재검사(FilePicker._finalize_pick)에서 전부 걸러진 경우.
 
+	var original_text := _import_button.text
+	_import_button.disabled = true
+	_import_button.text = "가져오는 중..."
+	await get_tree().process_frame
+
 	var result := CharacterLibrary.import_pack(files[0]["bytes"])
+
+	_import_button.text = original_text
+	_import_button.disabled = false
+
 	if not result["ok"]:
 		_import_error_dialog.dialog_text = result["error"]
 		_import_error_dialog.popup_centered()

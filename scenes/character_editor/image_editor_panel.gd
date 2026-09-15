@@ -200,6 +200,11 @@ func _finish_image_upload(bytes: PackedByteArray, file_name: String, slot: Strin
 ## Image.resize()는 원본 비율을 유지한 채 긴 변을 한도에 맞춘다(짧은 변은
 ## 비율대로 같이 줄어듦 - 찌그러지지 않음). 원본 확장자를 그대로 유지해서
 ## 다시 인코딩한다 - PNG는 무손실, JPG/WebP는 품질 0.9로 손실 압축.
+##
+## resize()/인코딩은 동기 호출이라 큰 이미지에서는 잠깐 멈춘 것처럼 보일 수
+## 있다(특히 스레드를 못 쓰는 웹). 그래서 버튼 문구를 "처리 중..."으로 바꾸고
+## 한 프레임을 기다린 뒤에 실제 작업을 한다 - await 없이 바로 무거운 작업을
+## 하면 문구가 바뀌었다는 사실 자체가 화면에 그려지기 전에 멈춰버린다.
 func _on_resize_confirmed() -> void:
 	if _pending_resize.is_empty() or _profile == null:
 		return
@@ -210,6 +215,13 @@ func _on_resize_confirmed() -> void:
 	var texture: Texture2D = data["texture"]
 	var file_name: String = data["file_name"]
 	var slot: String = data["slot"]
+
+	var portrait_original := _portrait_load_button.text
+	var thumbnail_original := _thumbnail_load_button.text
+	_set_load_buttons_disabled(true)
+	_portrait_load_button.text = "처리 중..."
+	_thumbnail_load_button.text = "처리 중..."
+	await get_tree().process_frame
 
 	var max_dimension: int = CharacterLimitsScript.PORTRAIT_MAX_DIMENSION if slot == "portrait" else CharacterLimitsScript.THUMBNAIL_MAX_DIMENSION
 	var image := texture.get_image()
@@ -227,6 +239,10 @@ func _on_resize_confirmed() -> void:
 			new_bytes = image.save_webp_to_buffer(false, 0.9)
 		_:
 			new_bytes = image.save_png_to_buffer()
+
+	_portrait_load_button.text = portrait_original
+	_thumbnail_load_button.text = thumbnail_original
+	_set_load_buttons_disabled(false)
 
 	var recheck := CharacterLimitsScript.check_image(new_width, new_height, new_bytes.size(), slot)
 	if not recheck["ok"]:

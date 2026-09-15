@@ -15,6 +15,8 @@ func run(r) -> void:
 	_test_pick_voice_file(r)
 	_test_pick_win_lose_players(r)
 	_test_priority_ordering(r)
+	_test_greeting_sequence_completes_synchronously_when_no_voices(r)
+	_test_skip_greeting_when_not_active_is_noop(r)
 
 
 func _test_voice_events_table(r) -> void:
@@ -117,3 +119,40 @@ func _test_priority_ordering(r) -> void:
 	r.expect_true("보너스가 야추 포기보다 우선순위 높음", p[GameEvents.Yacht.BONUS] > p[GameEvents.Yacht.ZERO])
 	r.expect_true("야추 포기가 게임 시작 인사보다 우선순위 높음", p[GameEvents.Yacht.ZERO] > p[GameEvents.Common.GAME_START])
 	r.expect_true("게임 시작 인사가 내 차례보다 우선순위 높음", p[GameEvents.Common.GAME_START] > p[GameEvents.Common.TURN_START])
+
+
+## 1-4C: 전원이 game_start 보이스를 안 가진 경우(내장 기본 캐릭터만 있는
+## 웹 첫 실행 등) play_greeting_sequence()가 await 지점을 한 번도 안 거치고
+## 그 자리에서 끝까지 돌아야 한다 - Main.gd가 이 함수를 부르기 직전에 입력
+## 차단을 켜놔도 화면에 아예 안 보이는 이유가 이 동기 완결성이다.
+func _test_greeting_sequence_completes_synchronously_when_no_voices(r) -> void:
+	var fallback := CharacterLibrary.get_builtin_fallback()
+	r.expect_true("내장 기본 캐릭터는 voice_map이 비어있음(이 테스트의 전제)", fallback.voice_map.is_empty())
+
+	var profiles: Array[CharacterProfile] = [fallback, fallback]
+	VoiceBank.configure(profiles)
+
+	# bool 지역변수를 람다에서 그냥 대입하면 GDScript 람다는 캡처를 값으로
+	# 뜨기 때문에(참조가 아님) 바깥에서 안 보인다 - 배열/딕셔너리처럼 참조
+	# 타입을 캡처해서 그 내용을 바꿔야 바깥에서도 보인다.
+	var step_fired := [false]
+	var finished_fired := [false]
+	VoiceBank.greeting_step_started.connect(func(_p): step_fired[0] = true, CONNECT_ONE_SHOT)
+	VoiceBank.greeting_sequence_finished.connect(func(): finished_fired[0] = true, CONNECT_ONE_SHOT)
+
+	VoiceBank.play_greeting_sequence()  # await가 있어도 아무도 안 걸리면 여기서 이미 다 끝나야 한다.
+
+	r.expect_true("아무도 매핑이 없으면 greeting_step_started가 한 번도 안 뜸", not step_fired[0])
+	r.expect_true("호출이 끝나는 시점에 이미 greeting_sequence_finished가 발생함(동기 완결)", finished_fired[0])
+
+	VoiceBank.configure([])  # 이 테스트가 만든 슬롯을 정리해서 다음 스위트에 영향 안 주게.
+
+
+func _test_skip_greeting_when_not_active_is_noop(r) -> void:
+	VoiceBank.configure([])
+	var finished_fired := [false]
+	VoiceBank.greeting_sequence_finished.connect(func(): finished_fired[0] = true, CONNECT_ONE_SHOT)
+
+	VoiceBank.request_skip_greeting()  # 진행 중인 시퀀스가 없을 때 - 아무 일도 없어야 한다.
+
+	r.expect_true("연출 중이 아닐 때 건너뛰기를 불러도 greeting_sequence_finished가 안 뜸", not finished_fired[0])

@@ -49,6 +49,11 @@ var _portrait_tween: Tween
 var _label_tween: Tween
 var _special_hand_tween: Tween
 
+# 게임 시작 인사 연출(1-4C) 진행 중인지. 이 동안 InputBlocker가 입력을
+# 막고, 클릭/키 입력은 건너뛰기로 처리하며, 디버그 버튼도 무시된다
+# (debug_hotkeys.greeting_active로 전달).
+var _greeting_active: bool = false
+
 @onready var start_screen: Control = $StartScreen
 @onready var game_screen: Control = $GameScreen
 @onready var players_2_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players2Button
@@ -67,6 +72,7 @@ var _special_hand_tween: Tween
 @onready var small_tags_row: HBoxContainer = $GameScreen/Margin/MainHBox/LeftColumn/SmallTagsRow
 @onready var special_hand_label: Label = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/SpecialHandLabel
 @onready var input_blocker: Control = $GameScreen/InputBlocker
+@onready var greeting_skip_hint: Label = $GameScreen/InputBlocker/GreetingSkipHint
 
 @onready var dice_labels: Array[Label] = [
 	$GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/DiceRow/Dice1,
@@ -187,6 +193,13 @@ func _ready() -> void:
 	# 게임을 새로 시작할 때마다가 아니라 여기서 딱 한 번만 연결한다.
 	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
 
+	# VoiceBank도 마찬가지로 앱 생애주기 내내 사는 autoload다 - 인사 연출
+	# 시퀀스 시그널도 여기서 한 번만 연결한다.
+	VoiceBank.greeting_step_started.connect(_on_greeting_step_started)
+	VoiceBank.greeting_sequence_finished.connect(_on_greeting_sequence_finished)
+
+	input_blocker.gui_input.connect(_on_input_blocker_gui_input)
+
 	for i in dice_labels.size():
 		var label := dice_labels[i]
 		label.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -196,10 +209,27 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# 인사 연출 중에는 어떤 키를 눌러도 건너뛰기다(ESC 포함) - 종료 확인
+	# 다이얼로그보다 먼저 검사해서, 연출 중 ESC가 종료 확인을 띄우지 않고
+	# 건너뛰기로만 동작하게 한다. 게임 화면엔 텍스트 입력 위젯이 없어서
+	# 아무 키나 받아도 다른 입력과 충돌하지 않는다.
+	if _greeting_active and event is InputEventKey and event.pressed and not event.echo:
+		VoiceBank.request_skip_greeting()
+		get_viewport().set_input_as_handled()
+		return
+
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		if game_screen.visible and not quit_confirm_dialog.visible:
 			quit_confirm_dialog.popup_centered()
 			get_viewport().set_input_as_handled()
+
+
+## 화면에 보이는 줄은 최근 것만 유지한다 - 안 그러면 DEBUG_MODE를 켜둔 채로
+## 게임을 여러 판 계속 돌릴 때(1-8 웹 테스트처럼) 이 라벨에 텍스트가 무한히
+## 쌓인다. append_text() 대신 배열에 최근 줄만 들고 있다가 매번 통째로
+## 다시 그린다 - 30줄이면 문자열 합치기 비용이 무시할 만하다.
+const DEBUG_LOG_MAX_LINES := 30
+var _debug_log_lines: Array[String] = []
 
 
 ## BuildInfo.DEBUG_MODE가 false면 아무것도 안 한다(콘솔 print도 포함) - 웹에서는
@@ -210,8 +240,23 @@ func _debug_init_log(message: String) -> void:
 	if not BuildInfo.DEBUG_MODE:
 		return
 	print("[초기화] %s" % message)
+	if debug_init_log == null:
+		return
+
+	_debug_log_lines.append("[%s] %s" % [Time.get_time_string_from_system(), message])
+	if _debug_log_lines.size() > DEBUG_LOG_MAX_LINES:
+		_debug_log_lines.pop_front()
+
+	debug_init_log.text = "\n".join(_debug_log_lines)
+	debug_init_log.scroll_to_line(debug_init_log.get_line_count() - 1)
+
+
+## 게임을 새로 시작할 때마다 이전 판의 로그가 남아있으면 "어디서 끊겼는지"를
+## 읽기 힘들어지므로 비운다.
+func _clear_debug_log() -> void:
+	_debug_log_lines.clear()
 	if debug_init_log != null:
-		debug_init_log.append_text("[%s] %s\n" % [Time.get_time_string_from_system(), message])
+		debug_init_log.text = ""
 
 
 ## 웹에서 특수족보 연출만 안 뜨던 버그를 잡을 때 만든 진단 - GameEvents.special_hand_rolled에
@@ -312,8 +357,15 @@ func _reset_portrait_transition_state() -> void:
 	special_hand_label.visible = false
 	input_blocker.visible = false
 
+	# 이론상 새 게임/재시작은 이전 판의 인사 연출이 끝난 뒤에만 가능하지만,
+	# 방어적으로 여기서도 정리한다(VoiceBank.configure()의 방어적 초기화와 같은 이유).
+	_greeting_active = false
+	debug_hotkeys.greeting_active = false
+	greeting_skip_hint.visible = false
+
 
 func _start_new_game(profiles: Array[CharacterProfile]) -> void:
+	_clear_debug_log()
 	_debug_init_log("게임 시작 초기화 시작 (인원 %d명)" % profiles.size())
 	_debug_log_special_hand_subscribers()
 	_clear_dynamic_nodes()
@@ -344,6 +396,9 @@ func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 
 	game_state.start_turn()
 	_debug_init_log("첫 턴 시작 완료 - 초기화 끝")
+
+	_start_greeting_sequence()
+	_debug_init_log("게임 시작 인사 연출 시작")
 
 
 func _clear_dynamic_nodes() -> void:
@@ -428,6 +483,58 @@ func _transition_portrait(profile: CharacterProfile, label_text: String) -> void
 	_label_tween.tween_property(big_name_label, "modulate:a", 0.0, PORTRAIT_FADE_DURATION / 2.0)
 	_label_tween.tween_callback(func() -> void: big_name_label.text = label_text)
 	_label_tween.tween_property(big_name_label, "modulate:a", 1.0, PORTRAIT_FADE_DURATION / 2.0)
+
+
+func _player_label_text(player_index: int, profile: CharacterProfile) -> String:
+	if profile != null:
+		return "플레이어 %d - %s" % [player_index + 1, profile.display_name]
+	return "플레이어 %d" % (player_index + 1)
+
+
+## 게임 시작 인사 연출(1-4C)을 시작한다 - 입력을 막고 VoiceBank에 순차 재생을
+## 맡긴다. 아무도 인사 보이스가 없으면(기본 캐릭터만 있는 경우 등)
+## VoiceBank.play_greeting_sequence()가 그 자리에서 동기적으로 끝까지 돌아
+## _on_greeting_sequence_finished()까지 호출하고 돌아오므로, 이 함수가
+## 리턴할 때쯤엔 이미 _greeting_active가 다시 false일 수 있다 - 그래서
+## 화면에는 차단이 전혀 안 보인다.
+func _start_greeting_sequence() -> void:
+	_greeting_active = true
+	debug_hotkeys.greeting_active = true
+	input_blocker.visible = true
+	greeting_skip_hint.visible = true
+	VoiceBank.play_greeting_sequence()
+
+
+## VoiceBank가 실제로 재생을 시작한 플레이어마다 한 번씩 emit하는 신호에
+## 반응해서 큰 슬롯을 그 플레이어로 전환한다("소개" 연출). 매핑이 없어서
+## 건너뛴 플레이어는 애초에 이 신호 자체가 안 온다.
+func _on_greeting_step_started(player_index: int) -> void:
+	if player_index == _current_portrait_player:
+		return
+	_current_portrait_player = player_index
+	var profile: CharacterProfile = player_character_assignments[player_index] if player_index < player_character_assignments.size() else null
+	_transition_portrait(profile, _player_label_text(player_index, profile))
+
+
+## 인사 연출이 끝나면(정상 종료/건너뛰기/전원 매핑 없음 전부 포함) 반드시
+## 여기가 불린다 - 입력을 반드시 풀어야 한다(안 풀리면 게임이 멈춘 것처럼
+## 보인다). 첫 턴 플레이어(항상 0번)로 화면을 되돌린다.
+func _on_greeting_sequence_finished() -> void:
+	_greeting_active = false
+	debug_hotkeys.greeting_active = false
+	input_blocker.visible = false
+	greeting_skip_hint.visible = false
+
+	var first_turn_player := game_state.current_player if game_state != null else 0
+	if first_turn_player != _current_portrait_player:
+		_current_portrait_player = first_turn_player
+		var profile: CharacterProfile = player_character_assignments[first_turn_player] if first_turn_player < player_character_assignments.size() else null
+		_transition_portrait(profile, _player_label_text(first_turn_player, profile))
+
+
+func _on_input_blocker_gui_input(event: InputEvent) -> void:
+	if _greeting_active and event is InputEventMouseButton and event.pressed:
+		VoiceBank.request_skip_greeting()
 
 
 func _on_special_hand_rolled(_player_index: int, category: int, _points: int) -> void:
@@ -611,11 +718,7 @@ func _refresh_character_area() -> void:
 	if current != _current_portrait_player:
 		_current_portrait_player = current
 		var profile: CharacterProfile = player_character_assignments[current] if current < player_character_assignments.size() else null
-		var label_text := (
-			"플레이어 %d - %s" % [current + 1, profile.display_name] if profile != null
-			else "플레이어 %d" % (current + 1)
-		)
-		_transition_portrait(profile, label_text)
+		_transition_portrait(profile, _player_label_text(current, profile))
 
 	for p in small_tag_rows.size():
 		small_tag_rows[p].visible = (p != current)

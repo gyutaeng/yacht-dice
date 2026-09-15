@@ -14,6 +14,21 @@ extends Node
 const VOICE_CROSSFADE_DURATION := 0.1
 const VOICE_FADE_OUT_DB := -40.0
 
+# 게임 시작 인사를 플레이어 순서대로 하나씩 재생하는 사이(1-4C). 이 시퀀스의
+# 진행 상황은 Main.gd가 시각 연출(초상 전환)과 입력 차단에 쓴다 - 여기서는
+# "언제 누가 인사하고 언제 다 끝났는지"만 알려주고, 화면을 어떻게 할지는
+# 전혀 모른다(원칙 5와 같은 정신 - VoiceBank는 오디오만, Main은 화면만).
+signal greeting_step_started(player_index: int)
+signal greeting_sequence_finished()
+
+# 시퀀스 내부에서만 쓰는 합류 신호 - 한 플레이어의 인사가 "끝났다"고 볼 수
+# 있는 경우가 둘이다: 보이스가 자연히 다 재생됐거나(AudioStreamPlayer.finished),
+# 사용자가 건너뛰기를 눌렀거나. 둘 다 여기로 모아서 play_greeting_sequence()의
+# await 지점 하나만 신경 쓰면 되게 한다.
+signal _greeting_advance()
+
+const GREETING_GAP_DURATION := 0.3  # 인사와 인사 사이에 쉬는 시간(초). 바로 이어붙이면 너무 급하게 들린다.
+
 # 이벤트 키별 우선순위. 숫자가 클수록 더 중요하다. 재생 중인 슬롯의 우선순위보다
 # 낮은 요청은 무시된다 — 승리 보이스가 다른 소리에 끊기면 안 되므로.
 const PRIORITY_ENDING := 100  # common.win, common.lose
@@ -41,6 +56,13 @@ var _slot_tweens: Array[Tween] = []
 
 var _event_priority: Dictionary = {}
 
+# 인사 시퀀스 진행 상태. _greeting_current_player는 "지금 대기 중인 슬롯이
+# 몇 번 플레이어인지"(대기 중이 아니면 -1) - 건너뛰기가 그 슬롯을 정확히
+# 멈추고 정리하는 데 필요하다.
+var _greeting_active: bool = false
+var _greeting_skip_requested: bool = false
+var _greeting_current_player: int = -1
+
 
 func _ready() -> void:
 	_event_priority[GameEvents.Common.WIN] = PRIORITY_ENDING
@@ -54,7 +76,6 @@ func _ready() -> void:
 	_event_priority[GameEvents.Common.GAME_START] = PRIORITY_GAME_START
 	_event_priority[GameEvents.Common.TURN_START] = PRIORITY_TURN_START
 
-	GameEvents.game_started.connect(_on_game_started)
 	GameEvents.turn_started.connect(_on_turn_started)
 	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
 	GameEvents.bonus_achieved.connect(_on_bonus_achieved)
@@ -76,6 +97,13 @@ func configure(profiles: Array[CharacterProfile]) -> void:
 	_current_priority.clear()
 	_last_played.clear()
 
+	# 이론상 새 게임은 이전 게임의 인사 시퀀스가 끝난 뒤에만 시작되지만,
+	# 방어적으로 여기서도 정리한다 - 남아있으면 새 게임의 인사가 시작부터
+	# "이미 진행 중"으로 오판될 수 있다.
+	_greeting_active = false
+	_greeting_skip_requested = false
+	_greeting_current_player = -1
+
 	_player_profiles = profiles
 
 	for p in profiles.size():
@@ -88,9 +116,69 @@ func configure(profiles: Array[CharacterProfile]) -> void:
 		_last_played.append({})
 
 
-# 전원이 동시에 인사하면 난장판이므로 그 판 첫 번째 플레이어만 인사한다.
-func _on_game_started(_player_count: int) -> void:
-	_play_for_player(0, GameEvents.Common.GAME_START)
+## Main.gd가 game_state.start_turn() 직후 딱 한 번 부른다. 플레이어 순서대로
+## 인사를 하나씩 재생하고(절대 안 겹침), 매핑이 없는 플레이어는 대기 없이
+## 바로 다음으로 건너뛴다. 전원이 매핑이 없으면 await 지점을 한 번도 안
+## 거치고 이 함수가 그 자리에서 끝까지 돌아 greeting_sequence_finished를
+## 동기적으로 emit한다 - Main.gd가 이 함수를 부르기 직전에 입력 차단을
+## 켜놨어도, 같은 프레임 안에서 도로 꺼지므로 화면엔 아예 안 보인다.
+func play_greeting_sequence() -> void:
+	if _greeting_active:
+		return  # 정상적으론 안 일어나지만(한 판에 한 번만 호출됨), 방어적으로.
+
+	_greeting_active = true
+	_greeting_skip_requested = false
+
+	var player_count := _player_profiles.size()
+	for p in player_count:
+		if _greeting_skip_requested:
+			break
+
+		if not _play_for_player(p, GameEvents.Common.GAME_START):
+			continue  # 매핑 없음 - 대기도, 화면 전환 요청도 없이 바로 다음.
+
+		greeting_step_started.emit(p)
+		_greeting_current_player = p
+		player_slots[p].finished.connect(_on_greeting_natural_finish, CONNECT_ONE_SHOT)
+		await _greeting_advance
+		_greeting_current_player = -1
+
+		if _greeting_skip_requested:
+			break
+		if p < player_count - 1:
+			await get_tree().create_timer(GREETING_GAP_DURATION).timeout
+
+	_greeting_active = false
+	greeting_sequence_finished.emit()
+
+
+## 인사 연출 중 건너뛰기 요청. 이미 끝났거나(연출 중이 아님) 이미 건너뛰기
+## 요청이 들어온 상태면 아무 것도 안 한다 - 빠르게 두 번 눌러도
+## greeting_sequence_finished가 두 번 나가지 않도록 하는 가드.
+func request_skip_greeting() -> void:
+	if not _greeting_active or _greeting_skip_requested:
+		return
+	_greeting_skip_requested = true
+
+	if _greeting_current_player != -1:
+		var p := _greeting_current_player
+		var player := player_slots[p]
+		if player.finished.is_connected(_on_greeting_natural_finish):
+			player.finished.disconnect(_on_greeting_natural_finish)
+		player.stop()
+		# AudioStreamPlayer.stop()은 finished를 emit하지 않는다 - 그냥 두면
+		# 이 슬롯의 _current_priority가 PRIORITY_GAME_START에 영원히 멈춰
+		# 있어서, 건너뛴 뒤로 그 플레이어의 다른 보이스(내 차례 등, 더 낮은
+		# 우선순위)가 전부 조용히 무시되는 버그가 된다. finished가 했을 일을
+		# 직접 해준다.
+		_on_slot_finished(p)
+		_greeting_current_player = -1
+
+	_greeting_advance.emit()
+
+
+func _on_greeting_natural_finish() -> void:
+	_greeting_advance.emit()
 
 
 func _on_turn_started(player_index: int) -> void:

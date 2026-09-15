@@ -32,10 +32,23 @@ const ALLOWED_AUDIO_EXTENSIONS := ["wav", "ogg", "mp3"]
 
 # sha256 해시 기반 디코딩 캐시. 같은 바이트를 여러 번 디코딩하지 않기 위함이다
 # (예: 1-3에서 턴이 바뀔 때마다 같은 캐릭터 텍스처를 다시 만드는 낭비를 막음).
-# 항목 수가 상한을 넘으면 가장 오래전에 "쓰인"(생성 또는 마지막 조회) 항목부터
-# 버린다(LRU). Dictionary는 삽입 순서를 유지하므로, 조회할 때 항목을 지웠다가
-# 다시 넣는 방식으로 "최근 사용"을 맨 뒤로 옮긴다.
+# 항목 수(64개)만 세던 예전 상한은 실제 메모리 사용량과 안 맞았다 - 캐시가
+# 들고 있는 건 원본 압축 바이트가 아니라 **디코딩된** Texture2D/AudioStream이라,
+# 2048x2048 RGBA 텍스처 한 장만 해도 16MB(width*height*4)다. 64개가 전부
+# 그 정도 해상도면 캐시 하나로 1GB 가까이 커질 수 있어서, 실제로 캐릭터를
+# 여러 개 바꿔가며 보는 시나리오(1-8 웹 테스트)에서 브라우저 탭이 죽을 수
+# 있었다. 그래서 개수 상한과 별개로 "추정 메모리 총합" 상한을 두고, 둘 중
+# 하나라도 넘으면 오래된 것부터 지운다(CacheState 참고).
 const MAX_CACHE_ENTRIES := 64
+
+# 이미지 캐시 150MB, 오디오 캐시 50MB - 브라우저 탭 하나가 각종 오버헤드
+# (WASM 힙, 오디오 버퍼, 렌더링 등) 없이도 편하게 감당할 수 있는 수준을
+# 넉넉히 보수적으로 잡았다. 150MB는 2048x2048(스탠딩 상한, CharacterLimits
+# 참고) 텍스처를 약 9장 동시에 들고 있을 수 있는 양이라, 실제로는 대부분
+# 그보다 작은 이미지를 쓰므로 훨씬 여유가 있다. 둘 다 별도의 script 상수라
+# 나중에 실측 후 조정하기 쉽다.
+const MAX_TEXTURE_CACHE_BYTES := 150 * 1024 * 1024
+const MAX_AUDIO_CACHE_BYTES := 50 * 1024 * 1024
 
 const PNG_SIGNATURE: PackedByteArray = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
 const JPEG_SIGNATURE: PackedByteArray = [0xFF, 0xD8, 0xFF]
@@ -45,8 +58,8 @@ const WAVE_SIGNATURE: PackedByteArray = [0x57, 0x41, 0x56, 0x45]  # "WAVE" (RIFF
 const OGG_SIGNATURE: PackedByteArray = [0x4F, 0x67, 0x67, 0x53]  # "OggS"
 const ID3_SIGNATURE: PackedByteArray = [0x49, 0x44, 0x33]  # "ID3" (ID3v2 태그가 붙은 mp3)
 
-var _texture_cache: Dictionary = {}  # sha256 hex -> Texture2D
-var _audio_cache: Dictionary = {}  # sha256 hex -> AudioStream
+var _texture_cache := CacheState.new(MAX_CACHE_ENTRIES, MAX_TEXTURE_CACHE_BYTES)
+var _audio_cache := CacheState.new(MAX_CACHE_ENTRIES, MAX_AUDIO_CACHE_BYTES)
 
 
 func load_texture_from_bytes(bytes: PackedByteArray) -> Texture2D:
@@ -54,7 +67,7 @@ func load_texture_from_bytes(bytes: PackedByteArray) -> Texture2D:
 		return null
 
 	var key := _hash_bytes(bytes)
-	var cached: Texture2D = _cache_get(_texture_cache, key)
+	var cached: Texture2D = _texture_cache.get_cached(key)
 	if cached != null:
 		return cached
 
@@ -76,7 +89,12 @@ func load_texture_from_bytes(bytes: PackedByteArray) -> Texture2D:
 		return null
 
 	var texture := ImageTexture.create_from_image(image)
-	_cache_put(_texture_cache, key, texture)
+	# 디코딩된 텍스처의 실제 메모리는 압축 전 원본 파일 크기와 무관하다 -
+	# 원본이 잘 압축된 PNG/WebP라도 픽셀 데이터는 항상 width*height*채널수만큼
+	# 풀린다. 채널 수를 이미지마다 따지는 대신 RGBA(4바이트/픽셀) 기준으로
+	# 넉넉하게 추정한다 - 과소평가보다 과대평가가 안전하다.
+	var estimated_bytes := image.get_width() * image.get_height() * 4
+	_texture_cache.put(key, texture, estimated_bytes)
 	return texture
 
 
@@ -85,7 +103,7 @@ func load_audio_from_bytes(bytes: PackedByteArray) -> AudioStream:
 		return null
 
 	var key := _hash_bytes(bytes)
-	var cached: AudioStream = _cache_get(_audio_cache, key)
+	var cached: AudioStream = _audio_cache.get_cached(key)
 	if cached != null:
 		return cached
 
@@ -105,7 +123,12 @@ func load_audio_from_bytes(bytes: PackedByteArray) -> AudioStream:
 		push_warning("AssetLoader: 오디오 디코딩 실패")
 		return null
 
-	_cache_put(_audio_cache, key, stream)
+	# 오디오는 이미지와 달리 원본 압축 바이트 크기를 그대로 메모리 추정치로
+	# 써도 된다 - WAV는 애초에 압축이 거의 없어 파일 크기가 곧 데이터 크기에
+	# 가깝고, OGG/MP3는 Godot이 재생 시점에 그때그때 스트리밍 디코딩하지
+	# 전체를 한꺼번에 PCM으로 풀어서 들고 있지 않으므로, 상주 메모리도 파일
+	# 크기에 훨씬 가깝다(이미지처럼 "압축 해제 후 크기"가 따로 없음).
+	_audio_cache.put(key, stream, bytes.size())
 	return stream
 
 
@@ -205,19 +228,69 @@ func _hash_bytes(bytes: PackedByteArray) -> String:
 	return ctx.finish().hex_encode()
 
 
-func _cache_get(cache: Dictionary, key: String):
-	if not cache.has(key):
-		return null
-	var value = cache[key]
-	cache.erase(key)
-	cache[key] = value  # 맨 뒤로 옮겨서 "가장 최근 사용됨"으로 표시
-	return value
+## 지금 캐시가 실제로 얼마나 차 있는지. DEBUG_MODE 화면 표시(debug_hotkeys.gd)가
+## 쓴다 - 개수 상한/메모리 상한을 실측으로 조정하려면 이 수치를 봐야 한다.
+func get_cache_stats() -> Dictionary:
+	return {
+		"texture_count": _texture_cache.count(),
+		"texture_bytes": _texture_cache.total_bytes(),
+		"audio_count": _audio_cache.count(),
+		"audio_bytes": _audio_cache.total_bytes(),
+	}
 
 
-func _cache_put(cache: Dictionary, key: String, value) -> void:
-	if cache.has(key):
-		cache.erase(key)
-	cache[key] = value
-	while cache.size() > MAX_CACHE_ENTRIES:
-		var oldest_key = cache.keys()[0]
-		cache.erase(oldest_key)
+## LRU 캐시 하나의 상태(항목/추정 메모리 총합)를 들고 있는다. 텍스처 캐시와
+## 오디오 캐시가 상한만 다르고 동작은 완전히 같아서(둘 다 "개수 또는 총
+## 바이트 중 하나라도 넘으면 가장 오래된 것부터 지운다") 로직을 한 곳에
+## 모았다 - 두 캐시가 서로 다르게 동작하는 사고를 막기 위함.
+class CacheState:
+	extends RefCounted
+
+	var _values: Dictionary = {}  # key -> 캐싱된 값(Texture2D/AudioStream)
+	var _sizes: Dictionary = {}  # key -> 추정 바이트(값과 별도로 들고 있어야 지울 때 총합에서 뺄 수 있음)
+	var _total_bytes: int = 0
+	var _max_entries: int
+	var _max_bytes: int
+
+
+	func _init(max_entries: int, max_bytes: int) -> void:
+		_max_entries = max_entries
+		_max_bytes = max_bytes
+
+
+	func get_cached(key: String):
+		if not _values.has(key):
+			return null
+		var value = _values[key]
+		var size: int = _sizes[key]
+		# 맨 뒤로 옮겨서 "가장 최근 사용됨"으로 표시(Dictionary는 삽입 순서 유지).
+		_values.erase(key)
+		_sizes.erase(key)
+		_values[key] = value
+		_sizes[key] = size
+		return value
+
+
+	func put(key: String, value, estimated_bytes: int) -> void:
+		if _values.has(key):
+			_total_bytes -= _sizes[key]
+			_values.erase(key)
+			_sizes.erase(key)
+
+		_values[key] = value
+		_sizes[key] = estimated_bytes
+		_total_bytes += estimated_bytes
+
+		while not _values.is_empty() and (_values.size() > _max_entries or _total_bytes > _max_bytes):
+			var oldest_key = _values.keys()[0]
+			_total_bytes -= _sizes[oldest_key]
+			_values.erase(oldest_key)
+			_sizes.erase(oldest_key)
+
+
+	func count() -> int:
+		return _values.size()
+
+
+	func total_bytes() -> int:
+		return _total_bytes
