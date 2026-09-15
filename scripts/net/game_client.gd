@@ -89,6 +89,13 @@ var _outgoing_queue: Array = []
 # 이 경우엔 뒤따라오는 disconnected를 한 번 건너뛴다.
 var _suppress_next_disconnect := false
 
+# 결측 청크 조사(2-5 후속) - 받는 쪽 버퍼(1MB, 청크 하나당 약 43.8KB라
+# 약 23개 여유)에 실제로 얼마나 가까이 갔는지 알아야 다음에 팩이 더
+# 커지거나 청크 수가 늘어도 안전한지 판단할 수 있다. PackTransferClient가
+# 해시 하나를 받기 시작할 때 reset_peak_available()로 비우고, 끝날 때
+# get_peak_available()로 최댓값을 읽어 요약 로그를 남긴다.
+var _peak_available := 0
+
 
 func _log(text: String) -> void:
 	if BuildInfo.DEBUG_MODE:
@@ -131,6 +138,7 @@ func _process(_delta: float) -> void:
 	# 계층이거나 아래 decode 실패 쪽)에 있다는 뜻이다). 대기가 0인 프레임은
 	# 로그가 넘치므로 건너뛴다.
 	var available := _peer.get_available_packet_count()
+	_peak_available = maxi(_peak_available, available)
 	var drained := 0
 	while _peer.get_available_packet_count() > 0:
 		_handle_packet(_peer.get_packet())
@@ -232,6 +240,18 @@ func _reset() -> void:
 ## "청크 N을 대기열에 넣음" 같은 문구를 만들 때 참고).
 func get_outgoing_queue_size() -> int:
 	return _outgoing_queue.size()
+
+
+## 결측 청크 조사(2-5 후속) - 마지막으로 비운 뒤 관찰된 "대기 개수"의
+## 최댓값. 받는 쪽 버퍼가 실제로 얼마나 여유 있었는지 판단하는 용도라
+## 값을 지우지 않고 그대로 돌려준다(호출부가 필요할 때 reset_peak_available()
+## 로 직접 비운다).
+func get_peak_available() -> int:
+	return _peak_available
+
+
+func reset_peak_available() -> void:
+	_peak_available = 0
 
 
 ## 반환값(bool)은 즉시 put_packet()에 성공했는지다 - 큐에 들어갔으면 false.

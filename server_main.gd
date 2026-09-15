@@ -84,6 +84,14 @@ func _ready() -> void:
 
 func _start_server() -> void:
 	var port := _resolve_port()
+
+	# 결측 청크 조사(2-5 후속) - create_server() 전에 설정해야 반영된다
+	# (클라이언트 쪽에서 순서가 중요함을 확인한 것과 같은 이유). 서버는
+	# 항상 네이티브라 print()를 그대로 믿을 수 있다(1-5의 "웹은 print()를
+	# 못 믿는다"는 클라이언트 전용 문제).
+	peer.set_inbound_buffer_size(NetProtocol.SERVER_INBOUND_BUFFER_BYTES)
+	print("[서버] 받는 쪽 버퍼 설정: 요청 %d바이트 → 실제 %d바이트" % [NetProtocol.SERVER_INBOUND_BUFFER_BYTES, peer.get_inbound_buffer_size()])
+
 	var err := peer.create_server(port)
 	if err != OK:
 		printerr("[서버] %d번 포트에서 시작할 수 없습니다 (%s)" % [port, error_string(err)])

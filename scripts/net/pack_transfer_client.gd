@@ -402,6 +402,9 @@ func _on_pack_upload_requested(hash: String) -> void:
 		# "멈췄다"고 오판하지 않는다.
 		_hash_last_chunk_msec[hash] = Time.get_ticks_msec()
 		_hash_next_stall_warning_msec[hash] = 0
+		# 받는 쪽 버퍼 여유 조사(2-5 후속, §8.5-6) - 이 해시를 받는 동안의
+		# "대기 개수" 최댓값을 새로 재기 시작한다(_finish_pending()에서 읽음).
+		_client.reset_peak_available()
 		for player_index in _hash_to_players[hash]:
 			if slot_states.get(player_index) == SlotState.WAITING:
 				slot_states[player_index] = SlotState.RECEIVING
@@ -558,6 +561,12 @@ func _finish_pending(hash: String) -> void:
 	if _my_pending_hashes.has(hash):
 		_my_pending_hashes.erase(hash)
 		_completed_count += 1
+		# 받는 쪽 버퍼 여유 조사(2-5 후속, §8.5-6) - 이 해시를 받는 동안
+		# 대기 개수가 실제로 얼마나 쌓였는지 요약한다. 이 값이 버퍼 한계에
+		# 가까워지면(예: 480청크짜리 15MB 팩) 청크를 줄이거나 버퍼를 더
+		# 키워야 한다는 신호다.
+		var capacity_estimate := int(NetProtocol.CLIENT_INBOUND_BUFFER_BYTES / NetProtocol.estimate_encoded_chunk_bytes())
+		_log("%s 이번 전송 중 최대 대기 %d개(버퍼 한계 약 %d개)" % [_player_tag(hash), _client.get_peak_available(), capacity_estimate])
 	if current_waiting_hash == hash:
 		current_waiting_hash = ""
 		_reset_stall_tracking()

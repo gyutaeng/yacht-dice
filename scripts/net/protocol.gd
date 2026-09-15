@@ -69,6 +69,22 @@ const MAX_CHUNK_RESEND_REQUESTS_PER_HASH := 3
 # 중요한 정보다(그러면 문제는 이 설정으로 못 건드리는 더 아래 계층에 있다는 뜻).
 const CLIENT_INBOUND_BUFFER_BYTES := 1024 * 1024
 
+# 결측 청크 조사(2-5 후속) - 실제로 원인이 이걸로 확정됐다(사용자가 웹
+# 빌드로 재전송 요청 0건 성공을 확인함, docs/multiplayer.md §8.5-6). 지금은
+# 업로드가 한 번에 한 명(Room.transfer_current_owner)뿐이라 서버가 실제로
+# 넘친 적은 없지만, 여러 방이 동시에 전송 중이면 한 서버 프로세스가 받는
+# 총량이 늘어나므로 클라이언트와 같은 값으로 미리 넉넉하게 잡아둔다.
+const SERVER_INBOUND_BUFFER_BYTES := 1024 * 1024
+
+
+## 청크 하나가 실제로 얼마나 큰 메시지가 되는지 대략 추정한다(Base64 인코딩
+## ceil(n/3)*4 + JSON 봉투 오버헤드 어림값 200바이트) - CLIENT_INBOUND_BUFFER_BYTES
+## 대비 "몇 개까지 버티는지"를 CHUNK_PAYLOAD_BYTES가 바뀌어도 다시 계산할
+## 필요 없이 항상 최신 값으로 보여주기 위함(PackTransferClient의 "이번 전송
+## 중 최대 대기 M개(버퍼 한계 약 N개)" 로그가 이 함수를 쓴다).
+static func estimate_encoded_chunk_bytes() -> int:
+	return int(ceil(float(CHUNK_PAYLOAD_BYTES) / 3.0) * 4.0) + 200
+
 # 닉네임(display_name)은 남의 화면에 그대로 뜨는 값이라 클라이언트가 보낸
 # 그대로 믿으면 안 된다(원칙 6). 상수/정리 함수를 여기 하나로 모아서
 # 클라이언트(scenes/online/online_screen.gd)와 서버(server_main.gd) 양쪽이
