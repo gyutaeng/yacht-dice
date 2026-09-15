@@ -46,6 +46,27 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 18
 text = "오디오 고르기"
 
+[node name="PersistenceLabel" type="Label" parent="Margin/Root"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "user:// 저장 테스트 (1-6 캐릭터 저장이 웹에서 실제로 유지되는지 검증용)"
+
+[node name="PersistenceRow" type="HBoxContainer" parent="Margin/Root"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SaveTestButton" type="Button" parent="Margin/Root/PersistenceRow"]
+custom_minimum_size = Vector2(160, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "저장 테스트"
+
+[node name="LoadTestButton" type="Button" parent="Margin/Root/PersistenceRow"]
+custom_minimum_size = Vector2(160, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "불러오기 테스트"
+
 [node name="ResultsLabel" type="Label" parent="Margin/Root"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 18

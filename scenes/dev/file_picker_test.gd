@@ -12,8 +12,15 @@ extends Control
 const IMAGE_EXTENSIONS: Array[String] = ["png", "jpg", "jpeg", "webp"]
 const AUDIO_EXTENSIONS: Array[String] = ["wav", "ogg", "mp3"]
 
+# 1-6에서 캐릭터를 user://에 저장할 예정인데, 웹에서 user://가 새로고침 후에도
+# 실제로 유지되는지(IndexedDB 기반 영구 저장소로 잡히는지) 미리 확인해두려고
+# 넣었다. 여기서 안 되면 캐릭터 편집 화면 자체가 무용지물이라 먼저 검증한다.
+const PERSISTENCE_TEST_PATH := "user://web_persistence_test.txt"
+
 @onready var _pick_image_button: Button = $Margin/Root/ButtonRow/PickImageButton
 @onready var _pick_audio_button: Button = $Margin/Root/ButtonRow/PickAudioButton
+@onready var _save_test_button: Button = $Margin/Root/PersistenceRow/SaveTestButton
+@onready var _load_test_button: Button = $Margin/Root/PersistenceRow/LoadTestButton
 @onready var _results_list: VBoxContainer = $Margin/Root/ResultsScroll/ResultsList
 @onready var _log_text: RichTextLabel = $Margin/Root/LogText
 
@@ -38,8 +45,15 @@ func _ready() -> void:
 
 	_pick_image_button.pressed.connect(_on_pick_image_button_pressed)
 	_pick_audio_button.pressed.connect(_on_pick_audio_button_pressed)
+	_save_test_button.pressed.connect(_on_save_test_button_pressed)
+	_load_test_button.pressed.connect(_on_load_test_button_pressed)
 
 	_log("준비 완료. 플랫폼: %s" % ("web" if OS.has_feature("web") else "desktop"))
+
+	# 새로고침 후에도 이전에 저장한 값이 남아있는지는 시작할 때 한 번
+	# 자동으로 읽어봐야 확인된다(버튼을 누르는 시점엔 이미 이번 세션에서
+	# 저장한 값과 뒤섞여서 구분이 안 됨).
+	_load_persistence_test("시작 시 자동 확인")
 
 
 # 웹에서는 브라우저가 "실제 클릭의 콜스택 안"에서만 파일창을 허용하므로,
@@ -71,6 +85,38 @@ func _on_audio_files_picked(files: Array) -> void:
 	_log("오디오 %d개 선택됨" % files.size())
 	for entry in files:
 		_add_audio_row(entry.name, entry.bytes)
+
+
+func _on_save_test_button_pressed() -> void:
+	var timestamp := Time.get_datetime_string_from_system(false, true)
+	var file := FileAccess.open(PERSISTENCE_TEST_PATH, FileAccess.WRITE)
+	if file == null:
+		_log("user:// 저장 실패 - %s (%s)" % [PERSISTENCE_TEST_PATH, error_string(FileAccess.get_open_error())])
+		return
+	file.store_string(timestamp)
+	file.close()
+	_log("user:// 저장 성공 - '%s'를 %s에 기록함" % [timestamp, PERSISTENCE_TEST_PATH])
+
+
+func _on_load_test_button_pressed() -> void:
+	_load_persistence_test("불러오기 테스트")
+
+
+## context: 로그에 어느 상황에서 읽은 건지 남기려는 접두사("시작 시 자동 확인"
+## vs "불러오기 테스트") - 새로고침 직후 자동 확인 결과와 버튼을 눌러 확인한
+## 결과가 로그에서 섞이지 않게 구분한다.
+func _load_persistence_test(context: String) -> void:
+	if not FileAccess.file_exists(PERSISTENCE_TEST_PATH):
+		_log("%s: user://에 저장된 값이 없음(%s)" % [context, PERSISTENCE_TEST_PATH])
+		return
+
+	var file := FileAccess.open(PERSISTENCE_TEST_PATH, FileAccess.READ)
+	if file == null:
+		_log("%s: user:// 읽기 실패 - %s (%s)" % [context, PERSISTENCE_TEST_PATH, error_string(FileAccess.get_open_error())])
+		return
+	var content := file.get_as_text()
+	file.close()
+	_log("%s: user:// 읽기 성공 - 저장된 값 '%s'" % [context, content])
 
 
 func _on_image_cancelled() -> void:
