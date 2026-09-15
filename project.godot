@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="YachtDice"
-run/main_scene="res://scenes/dev/file_picker_test.tscn"
+run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
