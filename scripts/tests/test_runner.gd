@@ -19,15 +19,21 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_voice_bank.gd"),
 	preload("res://scripts/tests/suites/test_file_picker.gd"),
 	preload("res://scripts/tests/suites/test_character_library.gd"),
+	preload("res://scripts/tests/suites/test_game_start_builtin_only.gd"),
 ]
 
 
 func _ready() -> void:
 	var reporter := TestReporterScript.new()
 
+	# await로 대기하는 이유: 대부분의 스위트는 동기로 끝나지만, 씬 하나를
+	# 통째로 add_child해서 실제 _ready()를 태워봐야 하는 통합 테스트(예:
+	# test_game_start_builtin_only.gd)는 프레임을 기다려야 한다. run()이
+	# await를 안 쓰면 이 await는 그냥 한 틱만에 통과하므로 기존 스위트에는
+	# 영향이 없다.
 	for suite_script in SUITES:
 		var suite = suite_script.new()
-		suite.run(reporter)
+		await suite.run(reporter)
 
 	var ok := reporter.print_summary()
 	get_tree().quit(0 if ok else 1)

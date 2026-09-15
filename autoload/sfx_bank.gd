@@ -49,12 +49,18 @@ func _make_player(volume_db: float) -> AudioStreamPlayer:
 	return player
 
 
+## 이 파일들은 게임에 내장된 res:// 리소스라 항상 load()로 읽는다 -
+## AssetLoader(바이트 기반)는 사용자가 올린 user:// 파일 전용이다. res:// 안의
+## .wav는 export 시 임포터가 변환한 리소스로 pck에 들어가고 원본 바이트는
+## 아예 안 들어가므로, FileAccess로 원본을 읽으려 하면 에디터에서는(원본이
+## 프로젝트 폴더에 그대로 있어서) 되지만 export된 빌드에서는 조용히 실패한다.
+##
 ## 파일이 아직 없으면(지금 dice_roll.wav/dice_hold.wav/yacht.wav가 그렇다) 경고 없이
 ## null을 돌려준다 — 나중에 파일을 채워 넣을 자리이지, 에러 상황이 아니다.
 func _load_optional(path: String) -> AudioStream:
-	if not FileAccess.file_exists(path):
+	if not ResourceLoader.exists(path):
 		return null
-	return AssetLoader.load_audio_from_path(path)
+	return load(path)
 
 
 func _on_dice_rolled(_player_index: int, _values: Array[int], _reroll_left: int) -> void:

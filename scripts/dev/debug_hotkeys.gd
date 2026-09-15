@@ -2,8 +2,10 @@ extends Node
 
 # ============================================================
 # 개발용 단축키 — 정식 빌드에는 절대 들어가면 안 된다.
-# OS.has_feature("editor")가 거짓이면(=에디터에서 실행한 게 아니면) _ready()에서
-# 자기 자신을 즉시 지워버려서, 배포 빌드에는 이 노드 자체가 남지 않는다.
+# BuildInfo.DEBUG_MODE가 false면 _ready()에서 자기 자신을 즉시 지워버려서,
+# 이 값이 false인 빌드에는 이 노드 자체가(키보드 단축키도 아래 디버그 버튼도)
+# 남지 않는다. 에디터냐 export냐는 안 따진다 - DEBUG_MODE 하나로 통일했다
+# (build_info.gd 참고). 정식 배포 전에는 반드시 그 값을 false로 되돌릴 것.
 #
 # 전부 Ctrl+Shift 조합을 쓴다 — F8/F9/F10/F11 등 단독 기능키는 Godot 에디터
 # 자신의 중지/단계 실행 단축키와 겹쳐서, 게임 창에 포커스가 있어도 에디터가
@@ -28,6 +30,13 @@ extends Node
 # _unhandled_input()이 아니라 _input()을 쓴다: 어떤 Control이 포커스를 들고
 # 있어도 무조건 먼저 받도록 해서, UI 쪽 변경으로 단축키가 조용히 안 먹는 일이
 # 없게 하기 위함이다(단, 텍스트 입력 위젯에 포커스가 있을 때는 위 이유로 예외).
+#
+# DEBUG_MODE일 때는 화면 구석에 같은 동작을 하는 버튼도 띄운다
+# (_build_debug_button_panel()) - 브라우저는 Ctrl+숫자 조합을 자체 단축키로
+# 먼저 가로채는 경우가 많아서(크롬 Ctrl+1~8은 탭 전환) 웹에서는 키보드 단축키를
+# 아예 못 믿는다. 버튼은 키와 똑같이 _perform_action()을 호출하므로 동작이
+# 완전히 같다 - 데스크톱 에디터에서는 키가 더 빠르니 그대로 쓰고, 웹에서는
+# 버튼으로 확실하게 누른다.
 # ============================================================
 
 var game_state: GameState
@@ -61,10 +70,23 @@ const FORCED_HAND_DICE := {
 	"force_four_of_a_kind": [2, 2, 2, 2, 5],
 }
 
+# 디버그 버튼에 쓸 짧은 라벨. KEY_ACTIONS와 순서를 맞춰서 버튼 순서가 위 주석의
+# Ctrl+Shift+1~4/S/A 순서와 같게 한다.
+const BUTTON_LABELS := {
+	"force_yacht": "야추",
+	"force_large_straight": "라지",
+	"force_full_house": "풀하우스",
+	"force_four_of_a_kind": "포카드",
+	"auto_confirm_one": "한 칸 확정",
+	"auto_finish_game": "끝까지 진행",
+}
+
 
 func _ready() -> void:
-	if not OS.has_feature("editor"):
+	if not BuildInfo.DEBUG_MODE:
 		queue_free()
+		return
+	_build_debug_button_panel()
 
 
 func _input(event: InputEvent) -> void:
@@ -80,8 +102,14 @@ func _input(event: InputEvent) -> void:
 	if _focus_is_text_input():
 		return  # 텍스트 입력 중엔(캐릭터 이름 칸 등) 단축키가 발동하면 안 된다.
 
-	print(ACTION_LOGS[action])
 	get_viewport().set_input_as_handled()
+	_perform_action(action)
+
+
+## 키보드 단축키와 디버그 버튼이 공유하는 실제 동작. 어느 쪽으로 들어와도
+## 완전히 같은 경로를 타게 해서 "버튼이 키와 다르게 동작"하는 일이 없게 한다.
+func _perform_action(action: String) -> void:
+	print(ACTION_LOGS[action])
 
 	if game_state == null:
 		print("[디버그] game_state가 아직 없음(게임 시작 전) - 무시")
@@ -97,6 +125,32 @@ func _input(event: InputEvent) -> void:
 			_auto_confirm_one()
 		"auto_finish_game":
 			_auto_finish_game()
+
+
+## 웹에서 Ctrl+Shift+숫자가 브라우저에 가로채여 안 먹는 문제 대응용 - 화면
+## 우하단에 작게 버튼 6개를 띄운다. CanvasLayer를 쓰는 이유: 이 노드(DebugHotkeys)는
+## Control이 아닌 평범한 Node라 부모의 레이아웃 트리에 안 얽매이고, CanvasLayer는
+## 어떤 부모 밑에 있든 화면 좌표계에 독립적으로 그려지므로 Main.tscn 쪽을 전혀
+## 안 건드리고 여기서만 완결된다.
+func _build_debug_button_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 100  # InputBlocker 등 게임 UI보다 확실히 위.
+	add_child(layer)
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT, Control.PRESET_MODE_MINSIZE, 8)
+	vbox.modulate = Color(1, 1, 1, 0.8)
+	vbox.add_theme_constant_override("separation", 4)
+	layer.add_child(vbox)
+
+	for action: String in KEY_ACTIONS.values():
+		var btn := Button.new()
+		btn.text = BUTTON_LABELS[action]
+		btn.custom_minimum_size = Vector2(104, 34)  # 처음엔 72x22로 만들었는데 웹에서 터치하기엔 너무 작았다.
+		btn.add_theme_font_size_override("font_size", 15)
+		btn.focus_mode = Control.FOCUS_NONE  # 눌러도 텍스트 입력 포커스를 뺏지 않게.
+		btn.pressed.connect(_perform_action.bind(action))
+		vbox.add_child(btn)
 
 
 func _focus_is_text_input() -> bool:

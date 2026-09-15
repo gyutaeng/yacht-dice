@@ -15,6 +15,35 @@ const BUILTIN_FALLBACK_PATH := "res://characters/default"
 const CharacterProfileScript = preload("res://scripts/characters/character_profile.gd")
 
 
+## 프로필의 파일 하나(초상/썸네일/보이스)를 읽는 진입점을 여기 하나로 모은다.
+## 내장 프로필(res://characters/default)과 사용자 프로필(user://characters/<id>)은
+## 읽는 방법이 달라야 한다:
+## - 내장(res://): export 시 Godot 임포터가 원본을 변환된 리소스로 바꿔 pck에
+##   넣고 원본 바이트는 안 들어간다. 그래서 반드시 load()로 읽는다. 에디터에서
+##   실행하면 원본이 프로젝트 폴더에 그대로 있어서 FileAccess로도 되는 것처럼
+##   보이지만, export된 빌드에서는 조용히 실패한다(SfxBank가 이 버그를 겪었다).
+## - 사용자(user://): 임포트를 거치지 않은 원본 그대로라, AssetLoader의
+##   바이트 기반 시그니처 판별로 읽어야 한다(확장자를 안 믿음, 원칙 3·6).
+## 이 둘을 헷갈리면 안 되므로 "어느 쪽 파일을 읽을지" 자체를 함수 호출부가
+## 신경 쓰지 않도록 profile.is_builtin으로 여기서 한 번에 분기한다.
+func load_profile_texture(profile: CharacterProfile, filename: String) -> Texture2D:
+	if profile == null or filename.is_empty():
+		return null
+	if profile.is_builtin:
+		var path := BUILTIN_FALLBACK_PATH.path_join(filename)
+		return load(path) if ResourceLoader.exists(path) else null
+	return AssetLoader.load_texture_from_path(CHARACTERS_DIR.path_join(profile.id).path_join(filename))
+
+
+func load_profile_audio(profile: CharacterProfile, filename: String) -> AudioStream:
+	if profile == null or filename.is_empty():
+		return null
+	if profile.is_builtin:
+		var path := BUILTIN_FALLBACK_PATH.path_join(filename)
+		return load(path) if ResourceLoader.exists(path) else null
+	return AssetLoader.load_audio_from_path(CHARACTERS_DIR.path_join(profile.id).path_join(filename))
+
+
 ## user://characters/ 아래의 "사용자" 캐릭터만 반환한다. 내장 기본 캐릭터는
 ## 절대 섞지 않는다 — 그걸 섞으면 사용자가 캐릭터를 하나라도 만드는 순간
 ## 목록에서 조용히 사라지고, 편집 화면에는 고치거나 지울 수 없는 내장 캐릭터에

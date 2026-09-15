@@ -4,6 +4,12 @@
 
 웹 파일 선택 기능(1-5)을 실제로 브라우저에서 되게 만드는 데 여러 세션이 걸렸다. 겪은 문제와 해결을 다 여기 적어둔다 — 다음에 웹 export를 다시 만지게 되면(1-8 최종 검증, 이후 캐릭터 팩 등) 같은 함정에 또 빠지지 않기 위해서다.
 
+## 절대 쓰지 말 것: 에디터의 "브라우저에서 실행"
+
+Godot 에디터 상단의 "브라우저에서 실행"(웹 플랫폼을 실행 대상으로 골랐을 때 나오는 재생 버튼)은 **쓰지 않는다.** 이건 임시 폴더에 디버그 빌드를 내보내고 에디터 내장 서버로 서빙하는 완전히 별도의 경로라서, 이 문서에 정리된 export 설정(`export_presets.cfg`의 `html/head_include`, `addons/build_stamp` 플러그인 등)이 똑같이 적용되는지 보장이 안 되고, 실제로 정식 export와 다르게 동작하는 게 확인됐다(게임 진행 자체가 막힘 — 정식 export로는 똑같은 상황에서 정상 동작). 왜 다르게 동작하는지는 파고들지 않기로 했다.
+
+**웹 테스트는 항상 아래 절차(export → `F:/Godot/web_build` → `python -m http.server`)만 쓴다.**
+
 ## 사전 준비: export template 설치
 
 Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > Manage Export Templates`)에서 현재 에디터 버전(4.7.2)과 정확히 일치하는 템플릿을 설치해야 한다. 버전이 안 맞으면 export 자체가 실패한다. 이 프로젝트에서 쓰는 Web 템플릿은 `web_nothreads_release.zip`/`web_nothreads_debug.zip`(아래 "Thread Support" 참고).
@@ -53,6 +59,10 @@ Godot 기본 폰트에 한글 글리프가 없다. 데스크톱은 OS 시스템 
 
 ### 4. "지금 보는 게 새 빌드인지 옛 빌드인지" 구분이 안 됨
 웹 빌드를 여러 번 다시 내보내면서 캐시된 옛날 빌드를 붙잡고 테스트하는 바람에 제자리를 맴돈 적이 있다. → 아래 "빌드 식별" 체계를 만들어서 **테스트 시작 전에 항상 먼저 확인하는 습관**으로 굳혔다.
+
+### 5. res:// 내장 리소스를 AssetLoader/FileAccess로 읽어서 export된 빌드에서만 조용히 실패
+`SfxBank`가 게임 내장 효과음(`res://assets/sfx/*.wav`)을 `AssetLoader.load_audio_from_path()`(내부적으로 `FileAccess`로 원본 바이트를 읽음)로 불러오고 있었다. 에디터에서 실행하면 원본 `.wav`가 프로젝트 폴더에 그대로 있어서 잘 됐지만, export하면 Godot 임포터가 원본을 변환된 리소스로 바꿔 pck에 넣고 **원본 바이트는 pck에 안 들어가서** `FileAccess.open()`이 조용히 실패했다(효과음이 안 남 — 에러도 안 뜸). → `load()`/`ResourceLoader.exists()`로 교체해서 해결(CLAUDE.md 원칙 3에도 반영). `CharacterPortrait`/`VoiceBank`가 내장 기본 캐릭터(`res://characters/default`)의 파일을 읽는 경로도 같은 함정이 있어서(지금은 내장 기본 캐릭터에 이미지/보이스가 없어 잠재적 버그였음) `CharacterLibrary.load_profile_texture()`/`load_profile_audio()`로 미리 고쳐뒀다 — 나중에 내장 기본 캐릭터에 실루엣 이미지 등을 추가할 때 또 겪지 않도록.
+- **교훈**: `res://` 안의 게임 내장 이미지/오디오는 반드시 `load()`/`preload()`로 읽는다. `AssetLoader`(바이트 기반)는 `user://`의 사용자 업로드 파일 전용이다. 이 버그는 **에디터 실행으로는 재현이 안 되고 실제 export된 빌드에서만** 나타나므로, 리소스 로딩 관련 변경은 반드시 export한 빌드로 확인할 것.
 
 ## 빌드 식별 (addons/build_stamp)
 

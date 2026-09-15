@@ -1,5 +1,12 @@
 extends Control
 
+# 화면 전환을 한 곳에서만 관리한다 - 이 셋 중 "지금 보여야 할 하나"만
+# visible=true가 되고 나머지는 전부 visible=false가 된다(_show_screen()).
+# 예전엔 버튼 핸들러마다 각자 visible을 켜고 꺼서, 하나를 끄는 걸 빠뜨리면
+# 안 보여야 할 화면이 뒤에 투명하게 남아 클릭을 가로채는 버그가 있었다.
+# GameOverOverlay는 GAME 위에 뜨는 모달이라 이 enum에 안 넣는다(별도 관리).
+enum Screen { START, CHARACTER_SELECT, GAME }
+
 const ROW_HEIGHT := 26.0
 const SMALL_TAG_SIZE := 56.0
 const PORTRAIT_FADE_DURATION := 0.3
@@ -84,6 +91,11 @@ var _special_hand_tween: Tween
 
 @onready var debug_hotkeys = $DebugHotkeys
 
+## BuildInfo.DEBUG_MODE일 때만 보이는 화면 좌상단 진단 로그(res://scenes/Main.tscn의
+## DebugInitLog 노드). 에디터에서 재현이 안 되고 export 빌드(특히 웹)에서만 나는
+## 버그를 잡을 때 쓴다 - 자세한 건 _debug_init_log() 참고.
+@onready var debug_init_log: RichTextLabel = $DebugInitLog
+
 
 func _ready() -> void:
 	locked_style.bg_color = Color(0.2, 0.6, 0.2, 0.5)
@@ -146,6 +158,7 @@ func _ready() -> void:
 	game_over_panel.add_theme_stylebox_override("panel", game_over_panel_style)
 
 	bold_font = load(BOLD_FONT_PATH)
+	special_hand_label.add_theme_font_override("font", bold_font)
 
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
@@ -179,6 +192,8 @@ func _ready() -> void:
 		label.mouse_filter = Control.MOUSE_FILTER_STOP
 		label.gui_input.connect(_on_dice_gui_input.bind(i))
 
+	debug_init_log.visible = BuildInfo.DEBUG_MODE
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
@@ -187,23 +202,65 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
+## BuildInfo.DEBUG_MODE가 false면 아무것도 안 한다(콘솔 print도 포함) - 웹에서는
+## 브라우저 콘솔의 print() 출력을 못 믿을 수 있어서(1-5 참고), 초기화 단계마다
+## 화면 구석에도 한 줄씩 남긴다. 어느 줄까지 찍히고 멈췄는지가 "어디서 끊겼는지"다.
+## debug_hotkeys.gd의 버튼/단축키와 마찬가지로 DEBUG_MODE 하나로 켜고 끈다.
+func _debug_init_log(message: String) -> void:
+	if not BuildInfo.DEBUG_MODE:
+		return
+	print("[초기화] %s" % message)
+	if debug_init_log != null:
+		debug_init_log.append_text("[%s] %s\n" % [Time.get_time_string_from_system(), message])
+
+
+## 웹에서 특수족보 연출만 안 뜨던 버그를 잡을 때 만든 진단 - GameEvents.special_hand_rolled에
+## 실제로 몇 개가, 누가 연결돼 있는지 찍는다. 개수가 기대(SfxBank/VoiceBank/Main
+## 셋)보다 적으면 "Main.gd의 _ready()가 connect()에 도달하기 전에 멈춘다"는 뜻이고,
+## 개수가 맞는데도 연출이 안 뜨면 "연결은 됐고 핸들러 안에서 멈춘다"는 뜻이다.
+func _debug_log_special_hand_subscribers() -> void:
+	if not BuildInfo.DEBUG_MODE:
+		return
+	var connections := GameEvents.special_hand_rolled.get_connections()
+	var names: Array[String] = []
+	for c in connections:
+		var callable: Callable = c["callable"]
+		var target := callable.get_object()
+		var target_name := "<null>"
+		if target != null:
+			target_name = target.name if (target is Node) else target.get_class()
+		names.append("%s.%s" % [target_name, callable.get_method()])
+	_debug_init_log("special_hand_rolled 구독자 수=%d, 목록=%s" % [connections.size(), names])
+
+
+## 셋 중 하나만 보이게 하는 유일한 통로. 새 화면을 추가하게 되면 여기 enum과
+## 이 함수에만 추가하면 된다 - 개별 핸들러에서 직접 .visible을 건드리지 말 것.
+func _show_screen(screen: Screen) -> void:
+	start_screen.visible = (screen == Screen.START)
+	character_select_screen.visible = (screen == Screen.CHARACTER_SELECT)
+	game_screen.visible = (screen == Screen.GAME)
+
+
 func _on_start_pressed(player_count: int) -> void:
-	start_screen.visible = false
-	character_select_screen.visible = true
+	_show_screen(Screen.CHARACTER_SELECT)
 	character_select_screen.configure(player_count)
 
 
 func _on_character_select_back() -> void:
-	character_select_screen.visible = false
-	start_screen.visible = true
+	_show_screen(Screen.START)
 
 
 func _on_character_selection_confirmed(profiles: Array[CharacterProfile]) -> void:
-	character_select_screen.visible = false
 	_start_new_game(profiles)
 
 
+## 캐릭터 편집 화면은 위 3화면과 달리 "덮어씌우는 오버레이"라 Screen enum에
+## 안 넣었다 - 대신 (1) 뒤 화면을 확실히 숨기고 (2) 편집 화면 루트에 화면
+## 전체를 덮는 불투명 배경 + mouse_filter STOP을 둬서(character_editor.tscn)
+## 이중으로 막는다. 시작 화면에서만 열리므로 닫을 때 시작 화면으로 되돌리면 된다.
 func _on_manage_characters_pressed() -> void:
+	start_screen.visible = false
+
 	var editor_scene: PackedScene = load("res://scenes/character_editor/character_editor.tscn")
 	var editor_instance: Control = editor_scene.instantiate()
 	# 동적으로 인스턴스화한 씬이라 정적 타입을 모른다 - 문자열 기반 connect로
@@ -212,6 +269,7 @@ func _on_manage_characters_pressed() -> void:
 	editor_instance.connect("closed", func() -> void:
 		remove_child(editor_instance)
 		editor_instance.queue_free()
+		start_screen.visible = true
 	)
 	add_child(editor_instance)
 
@@ -231,9 +289,8 @@ func _return_to_title() -> void:
 	debug_hotkeys.game_state = null
 	VoiceBank.configure([])
 
-	game_screen.visible = false
 	game_over_overlay.visible = false
-	start_screen.visible = true
+	_show_screen(Screen.START)
 
 
 func _reset_portrait_transition_state() -> void:
@@ -257,11 +314,12 @@ func _reset_portrait_transition_state() -> void:
 
 
 func _start_new_game(profiles: Array[CharacterProfile]) -> void:
+	_debug_init_log("게임 시작 초기화 시작 (인원 %d명)" % profiles.size())
+	_debug_log_special_hand_subscribers()
 	_clear_dynamic_nodes()
 
-	start_screen.visible = false
 	game_over_overlay.visible = false
-	game_screen.visible = true
+	_show_screen(Screen.GAME)
 	roll_button.disabled = false
 	selected_category = -1
 	_reset_portrait_transition_state()
@@ -269,14 +327,23 @@ func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 	var player_count := profiles.size()
 	game_state = GameState.new(player_count)
 	debug_hotkeys.game_state = game_state
+	_debug_init_log("캐릭터 배정 완료")
 
 	player_character_assignments = profiles
 	VoiceBank.configure(player_character_assignments)
+	_debug_init_log("보이스뱅크 설정 완료")
+
 	_build_character_area()
+	_debug_init_log("초상화 영역 생성 완료")
+
 	_build_scoreboard()
+	_debug_init_log("점수판 생성 완료")
 
 	game_state.state_changed.connect(_on_state_changed)
+	_debug_init_log("시그널 연결 완료")
+
 	game_state.start_turn()
+	_debug_init_log("첫 턴 시작 완료 - 초기화 끝")
 
 
 func _clear_dynamic_nodes() -> void:
@@ -364,6 +431,9 @@ func _transition_portrait(profile: CharacterProfile, label_text: String) -> void
 
 
 func _on_special_hand_rolled(_player_index: int, category: int, _points: int) -> void:
+	# 어떤 조건 검사보다도 먼저 찍는다 - 이 줄이 아예 안 찍히면 "핸들러 자체가
+	# 안 불림"이고, 이 줄은 찍히는데 그 다음이 안 되면 "핸들러 안에서 멈춤"이다.
+	_debug_init_log("_on_special_hand_rolled 호출됨 (category=%s)" % category)
 	if debug_hotkeys.is_auto_playing:
 		return  # F10 자동 진행 중엔 매번 1.5초씩 멈추면 안 되니 건너뛴다.
 	_play_special_hand_effect(category)
@@ -372,6 +442,11 @@ func _on_special_hand_rolled(_player_index: int, category: int, _points: int) ->
 # 캐릭터 보이스와 효과음은 이 함수가 아니라 GameEvents.special_hand_rolled를 각자
 # 직접 구독해서 따로 반응한다(VoiceBank/SfxBank). 여기서는 화면 연출만 맡는다.
 func _play_special_hand_effect(category: int) -> void:
+	_debug_init_log("특수족보 연출 시작: %s (label.visible=%s, rect=%s, global_rect=%s)" % [
+		GameState.CATEGORY_NAMES[category], special_hand_label.visible,
+		special_hand_label.size, special_hand_label.get_global_rect()
+	])
+
 	if _special_hand_tween != null and _special_hand_tween.is_valid():
 		_special_hand_tween.kill()
 
@@ -384,11 +459,13 @@ func _play_special_hand_effect(category: int) -> void:
 
 	_special_hand_tween = create_tween()
 	_special_hand_tween.tween_property(special_hand_label, "modulate:a", 1.0, SPECIAL_HAND_FADE_DURATION)
+	_special_hand_tween.tween_callback(func() -> void: _debug_init_log("특수족보 연출 - 페이드인 끝, modulate.a=%s" % special_hand_label.modulate.a))
 	_special_hand_tween.tween_interval(hold_duration)
 	_special_hand_tween.tween_property(special_hand_label, "modulate:a", 0.0, SPECIAL_HAND_FADE_DURATION)
 	_special_hand_tween.tween_callback(func() -> void:
 		special_hand_label.visible = false
-		input_blocker.visible = false)
+		input_blocker.visible = false
+		_debug_init_log("특수족보 연출 종료"))
 
 
 func _build_character_area() -> void:

@@ -143,8 +143,7 @@ func _build_file_row(event_key: String, filename: String) -> Control:
 func _on_preview_pressed(filename: String) -> void:
 	if _profile == null:
 		return
-	var base_dir := CharacterLibrary.CHARACTERS_DIR.path_join(_profile.id)
-	var stream := AssetLoader.load_audio_from_path(base_dir.path_join(filename))
+	var stream := CharacterLibrary.load_profile_audio(_profile, filename)
 	if stream == null:
 		push_warning("VoiceMappingPanel: 미리듣기 실패 - %s" % filename)
 		return

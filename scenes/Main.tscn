@@ -317,6 +317,19 @@ custom_minimum_size = Vector2(140, 44)
 layout_mode = 2
 text = "처음으로"
 
+[node name="DebugInitLog" type="RichTextLabel" parent="."]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 360.0
+offset_bottom = 150.0
+mouse_filter = 2
+modulate = Color(1, 1, 1, 0.85)
+theme_override_colors/default_color = Color(0.4, 1, 0.4, 1)
+theme_override_font_sizes/normal_font_size = 11
+bbcode_enabled = false
+scroll_active = true
+
 [node name="QuitConfirmDialog" type="ConfirmationDialog" parent="." unique_id=1962735809]
 title = "그만두기"
 initial_position = 1

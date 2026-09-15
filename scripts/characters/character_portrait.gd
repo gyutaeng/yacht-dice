@@ -18,10 +18,7 @@ static func placeholder() -> Texture2D:
 
 
 static func load_character_file_texture(profile: CharacterProfile, filename: String) -> Texture2D:
-	if profile == null or filename.is_empty():
-		return null
-	var base_dir := CharacterLibrary.BUILTIN_FALLBACK_PATH if profile.is_builtin else CharacterLibrary.CHARACTERS_DIR.path_join(profile.id)
-	return AssetLoader.load_texture_from_path(base_dir.path_join(filename))
+	return CharacterLibrary.load_profile_texture(profile, filename)
 
 
 ## 큰 초상화가 없거나(portrait_file 비어 있음) 로딩에 실패하면 실루엣

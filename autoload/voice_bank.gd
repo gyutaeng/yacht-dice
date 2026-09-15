@@ -223,8 +223,7 @@ func _play_for_player(player_index: int, event_key: String) -> bool:
 		return false
 	_last_played[player_index][event_key] = filename
 
-	var base_dir := CharacterLibrary.BUILTIN_FALLBACK_PATH if profile.is_builtin else CharacterLibrary.CHARACTERS_DIR.path_join(profile.id)
-	var stream := AssetLoader.load_audio_from_path(base_dir.path_join(filename))
+	var stream := CharacterLibrary.load_profile_audio(profile, filename)
 	if stream == null:
 		return false
 
