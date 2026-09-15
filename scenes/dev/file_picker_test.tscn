@@ -1,0 +1,74 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/dev/file_picker_test.gd" id="1_script"]
+
+[node name="FilePickerTest" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_script")
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="Root" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Margin/Root"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+text = "FilePicker 웹 검증용 테스트 화면"
+
+[node name="ButtonRow" type="HBoxContainer" parent="Margin/Root"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="PickImageButton" type="Button" parent="Margin/Root/ButtonRow"]
+custom_minimum_size = Vector2(180, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "이미지 고르기"
+
+[node name="PickAudioButton" type="Button" parent="Margin/Root/ButtonRow"]
+custom_minimum_size = Vector2(180, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "오디오 고르기"
+
+[node name="ResultsLabel" type="Label" parent="Margin/Root"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "결과 목록"
+
+[node name="ResultsScroll" type="ScrollContainer" parent="Margin/Root"]
+custom_minimum_size = Vector2(0, 260)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ResultsList" type="VBoxContainer" parent="Margin/Root/ResultsScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="LogLabel" type="Label" parent="Margin/Root"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "로그"
+
+[node name="LogText" type="RichTextLabel" parent="Margin/Root"]
+custom_minimum_size = Vector2(0, 160)
+layout_mode = 2
+bbcode_enabled = false
+scroll_active = true
+scroll_following = true

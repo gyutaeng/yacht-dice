@@ -48,17 +48,28 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - 1-4: VoiceBank(캐릭터 보이스 재생) 도입
 - 1-4B: 보이스 이벤트 테이블 10개로 확정, game_started 시그널 추가, SfxBank(게임 내장 효과음) 도입, 디버그 단축키를 Ctrl+Shift 조합으로 전환(F8/F9/F10이 Godot 에디터 자체 단축키와 충돌해서)
 - 1-5: FilePicker(데스크톱/웹 파일 선택 추상화)
+- 웹 빌드 한글 깨짐(네모) 수정: Pretendard(OFL-1.1) 폰트를 프로젝트 기본 폰트로 지정, `bold_font`를 합성 볼드에서 실제 Bold 파일로 교체. 데스크톱 windowed 실행과 실제 web export 양쪽에서 한글 렌더링 확인 완료.
+
+### 한글 폰트(Pretendard) 관련 참고
+- 파일: `assets/fonts/Pretendard-Regular.otf`, `Pretendard-Bold.otf`, `LICENSE.txt`(SIL OFL 1.1 원문 — 배포 시 저작권 표기에 씀). Pretendard 1.3.9, npm 패키지의 정적 otf 빌드(jsdelivr CDN에서 받음). OFL이라 상업적 재배포·번들 전부 허용.
+- 적용 위치: `project.godot`의 `[gui] theme/custom_font="res://assets/fonts/Pretendard-Regular.otf"` — 프로젝트 전체 기본 폰트라 개별 라벨에 지정할 필요 없음.
+- Bold가 실제로 필요한 곳은 확정된 점수 라벨(`Main.gd`의 `_refresh_scoreboard_ui`, `bold_font` 사용) 한 곳뿐이었다. `bold_font`는 원래 `ThemeDB.fallback_font`에 `variation_embolden`을 걸어 합성한 가짜 볼드였는데(한글 폰트가 없던 시절의 임시방편), 이제 `Pretendard-Bold.otf`를 직접 로드하도록 바꿨다(`Main.gd`의 `BOLD_FONT_PATH` 상수). 특수 족보 연출 라벨(`special_hand_label`)은 font_size만 키운 것이라 애초에 볼드가 아니었다.
+- 웹 빌드 전체 용량(릴리스, Thread Support 끈 상태): `index.wasm` 39.5MB + `index.pck` 2.55MB(폰트 포함 게임 리소스) + 나머지(js/아이콘) ~0.3MB = **총 약 41MB(42,398,023바이트)**. 96%가 Godot 엔진 wasm 자체라 폰트가 차지하는 비중은 크지 않다. 용량 최적화는 나중에 별도로 할 일.
+- `export_presets.cfg`는 `.gitignore` 대상이라 저장소에 없다. 다음 세션에서 다시 필요하면: 플랫폼 Web, `variant/thread_support=false`(이유는 위 1-5 절 참고), 나머지는 에디터 `프로젝트 > 내보내기`의 기본값 그대로 두면 된다.
 
 ### 1-5(파일 선택) 상태 — 다음에 이어서 할 일
 - 데스크톱 구현(FilePickerDesktop)은 검증 완료: FileDialog 시그널을 시뮬레이션해서 실제 파일을 백그라운드 스레드로 읽고, 확장자 필터링, 취소까지 전부 windowed 실행으로 확인했다.
 - **웹 구현(FilePickerWeb)은 아직 실제 브라우저에서 테스트하지 못했다 — 다음 세션에서 가장 먼저 할 일이다.** JavaScriptBridge API 존재 여부는 ClassDB로 확인했지만, 실제 브라우저에서 파일 선택창이 뜨는지·취소 감지가 동작하는지는 검증되지 않았다.
-- `scripts/io/`, `scripts/tests/suites/test_file_picker.gd`는 이 섹션을 쓰는 시점 기준 아직 커밋되지 않았다(`git status`로 확인할 것).
+- 브라우저 검증용으로 `scenes/dev/file_picker_test.tscn`(+`.gd`)을 만들어 뒀다. 이미지/오디오 고르기 버튼, 결과 목록(파일명·크기·AssetLoader 디코딩 성공 여부, 이미지 미리보기, 오디오 재생 버튼), 화면 하단 로그(웹 콘솔 대신 화면에 직접 찍음)까지 이 씬 하나로 "선택 → 바이트 → 텍스처/오디오" 전체 경로를 확인할 수 있다. `godot --headless ... file_picker_test.tscn --quit-after 1`로 에러 없이 로드되는 것까지만 확인했고, 실제 브라우저 동작은 미검증.
+- Web export의 **Thread Support는 꺼도 된다**: 저장소에서 `Thread`를 쓰는 곳은 `FilePickerDesktop` 하나뿐이고 `FilePicker.create()`가 웹에서는 `FilePickerWeb`을 골라 그 코드 자체가 실행되지 않는다(AssetLoader/VoiceBank/SfxBank도 전부 동기 코드). 켜면 COOP/COEP 헤더가 필요해 서버 설정만 복잡해진다.
+- `scripts/io/`, `scripts/tests/suites/test_file_picker.gd`, `scenes/dev/`는 이 섹션을 쓰는 시점 기준 아직 커밋되지 않았다(`git status`로 확인할 것).
 
 ### 웹 테스트 절차
-1. Godot 에디터 `프로젝트 > 내보내기`에서 Web export 프리셋 추가(export template 설치 필요).
-2. export한 폴더를 정적 파일 서버로 서빙한다 — `file://`로 직접 열면 브라우저가 막는다: `python -m http.server 8060` 후 `http://localhost:8060/`로 접속.
-3. FilePicker를 쓰는 버튼을 **실제로 마우스로 클릭**해서 테스트한다 — 자동화 스크립트로 흉내 낸 클릭은 브라우저가 파일 선택창을 막을 수 있어서 의미가 없다(이번 구현이 지키려는 바로 그 제약).
-4. 확인 포인트: 파일 선택창이 뜨는지 / 여러 개 골랐을 때 다 들어오는지 / 취소 시 `pick_cancelled`만 오고 에러가 없는지(개발자 도구 콘솔) / 허용 안 한 확장자를 억지로 골라도 걸러지는지.
+1. `project.godot`의 `run/main_scene`을 잠시 `res://scenes/dev/file_picker_test.tscn`으로 바꾼다(에디터 `프로젝트 > 프로젝트 설정 > Application > Run > Main Scene`에서 바꾸거나, `project.godot` 파일을 직접 편집). **테스트 끝나면 `res://scenes/Main.tscn`으로 반드시 되돌릴 것.**
+2. Godot 에디터 `프로젝트 > 내보내기`에서 Web export 프리셋을 추가한다(export template 설치 필요). Thread Support는 위 이유로 꺼둔다.
+3. export한 폴더를 정적 파일 서버로 서빙한다 — `file://`로 직접 열면 브라우저가 막는다: `python -m http.server 8060` 후 `http://localhost:8060/`로 접속.
+4. `file_picker_test.tscn`의 버튼을 **실제로 마우스로 클릭**해서 테스트한다 — 자동화 스크립트로 흉내 낸 클릭은 브라우저가 파일 선택창을 막을 수 있어서 의미가 없다(이번 구현이 지키려는 바로 그 제약).
+5. 확인 포인트: 파일 선택창이 뜨는지 / 여러 개 골랐을 때 다 들어오는지 / 취소 시 로그에 "취소됨"만 남고 에러가 없는지(개발자 도구 콘솔도 같이 확인) / 허용 안 한 확장자를 억지로 골라도 걸러지는지 / 이미지 미리보기와 오디오 재생이 실제로 되는지.
 
 ### 현재 전체 테스트 개수
 373개 (`scripts/tests/test_runner.tscn`, 전부 통과 — 이 중 FilePicker 쪽 12개는 위에서 말했듯 아직 미커밋 상태일 수 있다).

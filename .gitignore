@@ -1,4 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 export.cfg
-export_presets.cfg
+
+# export_presets.cfg가 가리키는 실제 빌드 결과물(큰 바이너리라 커밋 대상 아님).
+build/
+
+# export_presets.cfg는 민감한 값(키스토어 비밀번호 등)이 생기기 전까지는 커밋 대상.
+# 그런 값이 필요해지면 그때 다시 .gitignore로 옮기고 credentials 등으로 분리할 것.

@@ -4,6 +4,7 @@ const ROW_HEIGHT := 26.0
 const SMALL_TAG_SIZE := 56.0
 const PORTRAIT_FADE_DURATION := 0.3
 const PLACEHOLDER_PORTRAIT_PATH := "res://assets/placeholder_portrait.png"
+const BOLD_FONT_PATH := "res://assets/fonts/Pretendard-Bold.otf"
 
 # 효과음은 SfxBank가 special_hand_rolled를 직접 구독해서 재생한다(여기선 화면 연출만).
 const SPECIAL_HAND_DISPLAY_DURATION := 1.5
@@ -18,7 +19,7 @@ var row_divider_style := StyleBoxFlat.new()
 var preview_button_style := StyleBoxFlat.new()
 var selected_cell_style := StyleBoxFlat.new()
 var game_over_panel_style := StyleBoxFlat.new()
-var bold_font := FontVariation.new()
+var bold_font: Font  # 확정된 점수 표시용. Pretendard Bold를 그대로 쓴다(_ready에서 로드).
 
 # 점수판에서 "선택"만 된 상태(아직 확정 아님). 주사위를 다시 굴리면 해제된다.
 var selected_category: int = -1
@@ -143,8 +144,7 @@ func _ready() -> void:
 	game_over_panel_style.content_margin_bottom = 24
 	game_over_panel.add_theme_stylebox_override("panel", game_over_panel_style)
 
-	bold_font.base_font = ThemeDB.fallback_font
-	bold_font.variation_embolden = 0.6
+	bold_font = load(BOLD_FONT_PATH)
 
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
