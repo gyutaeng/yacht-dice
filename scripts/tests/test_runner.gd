@@ -25,6 +25,7 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_character_editor_scene.gd"),
 	preload("res://scripts/tests/suites/test_debug_log.gd"),
 	preload("res://scripts/tests/suites/test_game_start_builtin_only.gd"),
+	preload("res://scripts/tests/suites/test_auto_confirm.gd"),
 ]
 
 

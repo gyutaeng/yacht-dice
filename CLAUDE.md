@@ -50,6 +50,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - 1-5: FilePicker(데스크톱/웹 파일 선택 추상화) — **완료. 데스크톱·웹 양쪽 실제 브라우저/앱에서 검증됨.**
 - 1-6: 캐릭터 편집 UI(CharacterEditor) + 게임 시작 전 캐릭터 선택 화면 — **완료. 데스크톱·웹 양쪽에서 전체 흐름 실제 확인(특수 족보 연출 포함).**
 - 1-7: 캐릭터 팩(.ydchar.zip 내보내기/가져오기) — **데스크톱은 실제 클릭까지 확인 완료. 웹은 export만 했고 사용자의 브라우저 확인이 아직 안 됨.**
+- 2-1: 멀티플레이 설계 문서(`docs/multiplayer.md`) + GameState headless 검증(`server_main.gd`) — **완료.**
 
 ### 1-5(파일 선택) 완료 요약
 - 데스크톱: `FilePickerDesktop`(Godot `FileDialog` + 백그라운드 스레드 읽기)으로 검증 완료.
@@ -105,7 +106,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - **볼드체 적용**: `special_hand_label`에 `Pretendard-Bold.otf`(이미 있던 파일)를 `add_theme_font_override("font", bold_font)`로 적용했다. ExtraBold(OFL, jsdelivr에서 받아봄, 1.5MB)도 비교해보려 했으나 위 재현 문제로 나란히 비교할 시간을 못 냈고, 우선 Bold로 반영 후 제거했다(저장소에 안 남음) — 사용자가 실제로 보고 부족하다고 판단하면 그때 ExtraBold/Black을 다시 받아 비교하기로 함(둘 다 같은 OFL 라이선스, 파일 크기도 비슷해서 웹 빌드 용량에 미치는 영향은 미미함 - Bold를 ExtraBold로 "교체"하면 순증가는 없고, "추가"하면 약 1.5MB 늘어남).
 
 ### 현재 전체 테스트 개수
-387개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+482개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 `DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은
@@ -355,6 +356,71 @@ export할 때 항상 출력 경로를 명시적으로 넘겨서(`--export-releas
 `variant/thread_support=false`는 그대로 유지됨을 확인함. 의도한 변경이
 아니라 여기 기록만 해둔다 - 문제 되면 알려주기 바람.
 
+### 2-1(GameState headless 검증) 완료 요약
+- **`GameState.auto_confirm_least_damaging(player_index) -> int`** (`scripts/game_state.gd`)를
+  신설해서, `docs/multiplayer.md` §6에서 정한 대로 "반응 없는 플레이어 대신
+  안전하게 한 수 두기" 판단 로직을 GameState 정식 함수로 승격했다. 화면도
+  네트워크도 필요 없는 순수 규칙 로직이라 여기 있어야 디버그 빌드 플래그와
+  무관하게 항상 동작한다(디버그 전용 파일에 있으면 배포 빌드에서 죽는다).
+  - 판단 기준: 아직 안 굴렸으면 정확히 한 번만 굴리고(리롤 없음) → 미확정
+    칸 중 지금 다이스로 최고점 칸을 고름 → 전부 0점이면 **카테고리 인덱스가
+    가장 낮은 칸**을 포기(비교를 `>`로만 해서 동점이면 먼저 본 것이 유지되게
+    구현 — 재현 가능한 결정적 동작을 위한 명시적 타이브레이크 규칙).
+  - `debug_hotkeys.gd`의 `_auto_confirm_one()`/`_auto_finish_game()`은 이제
+    이 함수를 부르기만 하는 얇은 껍데기고, 옛 판단 로직(`_ensure_rolled()`/
+    `_find_open_category()`)은 삭제했다.
+  - 새 테스트 6개(`scripts/tests/suites/test_auto_confirm.gd`): 안 굴린
+    상태면 정확히 한 번만 굴리는지, 같은 시드·같은 상황에서 결정적인지,
+    전부 0점이면 가장 낮은 인덱스를 포기하는지, 남은 칸이 하나뿐이면 그걸
+    고르는지, 최고점 칸을 고르는지, `game_state.gd` 소스 자체가
+    `DEBUG_MODE`/`BuildInfo`를 참조하지 않는지(코드 수준 회귀 테스트).
+- **`server_main.gd` + `server_main.tscn`**: GameState를 화면 없이 콘솔에서
+  끝까지 돌려보는 headless 진입점. 실행 명령:
+  `godot --headless --path . res://server_main.tscn -- <인원수>`
+  (인원수 생략 시 기본 2). 명령: `roll` / `hold <번호...>` / `score <족보키>`
+  / `state` / `auto` / `quit`. 규칙 위반(안 굴린 상태에서 확정 시도, 이미
+  확정된 칸, 리롤 초과, 범위 밖 주사위 번호, 알 수 없는 족보/명령 등)은
+  전부 크래시 없이 한국어 에러 메시지를 찍고 계속 진행하도록 만들었고,
+  자동 진행 명령(`auto`) 24회로 2인 게임을 끝까지 돌려 승자 출력까지
+  실제로 확인했다(공동 우승은 `get_winners()`가 동점자를 전부 모아주는
+  기존 구현을 그대로 재사용해서 별도 분기가 필요 없었다).
+  - **주의(다음에 비슷한 걸 만들 때 참고)**: `OS.read_string_from_stdin()`은
+    줄 단위가 아니라 그 순간 버퍼에 들어와 있는 만큼을 통째로 돌려준다.
+    명령을 빠르게 이어 보내면(테스트용 파이프 입력 등) 한 번의 호출에
+    여러 줄이 개행 문자와 함께 섞여 들어와서, 이를 한 줄짜리 명령으로
+    착각하면 "알 수 없는 명령"으로 통째로 실패한다 - 읽은 덩어리를 직접
+    `\n`으로 잘라 큐에 쌓아두고 하나씩 처리하도록 고쳐서 해결했다.
+  - **서버 RNG 시드를 `Crypto.generate_random_bytes()`로 교체**(후속 수정):
+    처음엔 "`randomize()`가 이 환경에서 멈춘다"고 오판해서
+    `Time.get_ticks_usec()` 기반 시드로 피해갔는데, 사용자가 지적한 대로
+    이건 서버에서 쓰면 안 되는 방식이었다 - 서버가 언제 켜졌는지 대충
+    알면 시드 범위가 좁혀지고, 시드를 알면 앞으로 나올 주사위를 전부
+    계산할 수 있어서 "서버가 굴리니까 치팅 불가능"이라는 Phase 2의
+    전제(`docs/multiplayer.md` §0) 자체가 무너진다. `Crypto` 클래스와
+    `generate_random_bytes()`가 이 Godot 4.7 빌드에 실제로 존재/동작하는
+    것을 `--headless --script`로 직접 확인한 뒤(2회 호출로 서로 다른
+    바이트가 나오는 것까지 확인), `server_main.gd`에 8바이트를 받아
+    64비트 정수로 접어 `RandomNumberGenerator.seed`에 넣는
+    `_generate_secure_seed()`를 추가했다. **웹 export 호환 여부는 따로
+    검증하지 않았다** - `docs/multiplayer.md` §0에 서버는 항상 네이티브
+    headless 바이너리로만 돌고 Web export는 클라이언트 전용이라고 이미
+    못박혀 있어서, 이 함수는 `server_main.gd`(서버 전용 진입점)에만 있고
+    클라이언트가 쓰는 `Main.gd`의 로컬 싱글 모드는 손대지 않았다(거긴
+    `GameState._init()`이 여전히 자체 `randomize()`를 쓴다 - 겨룰 상대가
+    없는 로컬 플레이라 시드 예측 가능성이 문제되지 않는다).
+  - **정정: `randomize()`는 안 멈춘다.** 같은 방식(`--headless --script`)으로
+    `randomize()`만 따로 다시 불러보니 즉시 리턴했다 - 처음에 겪은 "멈춤"은
+    `randomize()`가 아니라 `OS.read_string_from_stdin()`이 파이프로 빠르게
+    이어 보낸 여러 줄을 한 번에 통째로 읽어버려서, 그 한 번의 읽기를 처리한
+    뒤 stdin이 이미 바닥났는데 다음 읽기를 무한정 기다리며 멈춘 것이었다
+    (바로 위에서 이미 고친 버그와 같은 원인). 다음에 비슷한 멈춤을 만나면
+    `randomize()`부터 의심하지 말고 입출력 버퍼링을 먼저 볼 것.
+- **보고: GameState의 UI 의존 여부** — `scripts/game_state.gd` 전체를
+  다시 읽어 확인한 결과 **UI/Node 의존 없음**. `RefCounted`이고 상태
+  갱신은 전부 공개 필드·메서드로, 외부 통지는 전부 `GameEvents` 시그널
+  방출로만 한다. Phase 0에서 이미 제대로 분리되어 있었고, 이번 headless
+  검증으로 실제 동작까지 확인됨 - 서버로 옮겨도 터질 UI 참조가 없다.
+
 ### 남은 단계
 - 1-4C 실제 확인: 인사 보이스가 매핑된 캐릭터로 2인 이상 게임을 시작해서
   순서/간격/전환/건너뛰기(버튼)/디버그 버튼 무시/보이스 안 겹침(야추 포기
@@ -362,4 +428,5 @@ export할 때 항상 출력 경로를 명시적으로 넘겨서(`--export-releas
 - 1-8: `docs/web_verification_checklist.md`대로 웹 전체 점검(사용자가 직접
   브라우저에서 진행 중) - 캐릭터 편집 화면, 캐릭터 팩, 업로드 제한, 시크릿
   모드, 오디오 자동재생 정책, 메모리, 창 크기 변경까지.
-- Phase 2: 온라인 멀티플레이
+- Phase 2: 온라인 멀티플레이 (2-1 완료, 다음은 `docs/multiplayer.md`의
+  2-2부터 - 네트워크는 아직 하나도 안 붙임)

@@ -20,8 +20,10 @@ extends Node
 #                (넷 다 순환이 아니라 직접 지정이다 — 원하는 족보를 바로 띄워야
 #                테스트가 빠르다. 실제 game_state.roll() 경로를 그대로 타므로
 #                special_hand_rolled 연출·보이스가 진짜 이벤트로 뜬다.)
-# Ctrl+Shift+S : 현재 플레이어의 미확정 항목 중 첫 번째를 지금 점수로 즉시
-#                확정하고 턴을 넘긴다.
+# Ctrl+Shift+S : 현재 플레이어 대신 GameState.auto_confirm_least_damaging()이
+#                고른 가장 손해가 적은 칸을 즉시 확정하고 턴을 넘긴다(안
+#                굴렸으면 한 번만 굴린 뒤 판단 - 자세한 기준은 그 함수의
+#                문서 주석과 docs/multiplayer.md §6 참고).
 # Ctrl+Shift+A : 게임이 끝날 때까지 위 확정을 반복해서 게임 종료 화면까지
 #                바로 간다(48턴짜리 4인 게임을 매번 손으로 클릭하지 않고
 #                승리/패배 연출·보이스를 테스트하기 위한 것).
@@ -236,31 +238,20 @@ func _force_hand(dice: Array) -> void:
 	game_state.roll()
 
 
+## 어느 칸을 고를지의 판단(가장 손해가 적은 칸, 안 굴렸으면 한 번만 굴리는
+## 것 포함)은 전부 GameState.auto_confirm_least_damaging()에 있다 - 여기서는
+## 그 함수를 부르기만 한다. docs/multiplayer.md §6에서 정한 대로, 이 판단
+## 로직이 DEBUG_MODE 뒤에 숨어 있으면 정식 출시 때 DEBUG_MODE를 false로
+## 되돌리는 순간 서버의 AFK 자동 진행까지 같이 죽어버리므로, 절대 이
+## 파일에 로직 본체를 두면 안 된다.
 func _auto_confirm_one() -> void:
-	_ensure_rolled()
-	var category := _find_open_category()
-	if category != -1:
-		game_state.confirm_category(category)
+	game_state.auto_confirm_least_damaging(game_state.current_player)
 
 
 func _auto_finish_game() -> void:
 	is_auto_playing = true
 	while not game_state.game_over:
-		_ensure_rolled()
-		var category := _find_open_category()
+		var category := game_state.auto_confirm_least_damaging(game_state.current_player)
 		if category == -1:
-			break
-		game_state.confirm_category(category)
+			break  # 정상 상태라면 도달 안 함 - 무한 루프 방지용 방어 코드.
 	is_auto_playing = false
-
-
-func _ensure_rolled() -> void:
-	if not game_state.has_rolled:
-		game_state.roll()
-
-
-func _find_open_category() -> int:
-	for i in GameState.CATEGORY_NAMES.size():
-		if not game_state.player_score_confirmed[game_state.current_player][i]:
-			return i
-	return -1

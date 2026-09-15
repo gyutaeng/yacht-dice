@@ -167,6 +167,54 @@ func confirm_category(category_index: int) -> void:
 	state_changed.emit()
 
 
+## 이 플레이어 대신 안전하게 한 수 두고 그 결과 카테고리를 돌려준다 - 반응
+## 없는 플레이어를 대신 진행시켜야 하는 곳(디버그 단축키, 나중에 서버의
+## 연결 끊김/턴 제한 시간 처리 - docs/multiplayer.md §6)이 전부 이 함수
+## 하나를 통해서만 그 판단을 한다. 판단 로직을 여러 곳에 따로 두면 서버와
+## 로컬이 다른 기준으로 "안전한 수"를 고르게 될 위험이 있어서, 여기 하나로
+## 모았다 - 화면도 네트워크도 필요 없는 순수 규칙 로직이라 GameState가
+## 있을 자리다(디버그 전용 파일에 있으면 안 됨 - 그 파일은 디버그 빌드
+## 플래그가 꺼지면 자체가 비활성화되므로, 여기 있어야 항상 동작한다).
+##
+## 아직 한 번도 안 굴렸으면(has_rolled == false) 먼저 정확히 한 번만
+## 굴린다 - 리롤은 안 한다(추가로 최적화하는 건 "안전하게 한 수 두는"
+## 목적을 넘어서는 과한 자동 플레이라고 봄). 그 다음 확정 안 한 칸 중
+## 지금 다이스로 가장 높은 점수를 주는 칸을 고른다. 전부 0점이면(성립하는
+## 족보가 하나도 없으면) 어차피 뭘 골라도 0점이므로, 상단 섹션처럼 개별
+## 배점 상한이 낮은 칸을 먼저 포기하는 셈이 되도록 **카테고리 인덱스가
+## 낮은 쪽을 우선한다**(비교를 `>`로만 해서 동점이면 먼저 본 것, 즉
+## CATEGORY_NAMES 앞쪽이 그대로 유지됨). 완벽한 최적 플레이가 아니라
+## "언제 불러도 항상 같은 결과가 나오는 안전한 기본값"이 목적이다 -
+## 테스트가 이 결정성에 의존한다.
+##
+## player_index가 지금 차례가 아니거나 게임이 이미 끝났으면 아무 것도 안
+## 하고 -1을 돌려준다(호출부의 실수를 방어).
+func auto_confirm_least_damaging(player_index: int) -> int:
+	if player_index != current_player or game_over:
+		push_warning("GameState.auto_confirm_least_damaging: 플레이어 %d는 지금 차례가 아니거나 게임이 이미 끝남" % player_index)
+		return -1
+
+	if not has_rolled:
+		roll()
+
+	var best_category := -1
+	var best_score := -1
+	for category in CATEGORY_NAMES.size():
+		if player_score_confirmed[current_player][category]:
+			continue
+		var score := calculate_score(category, dice_results)
+		if score > best_score:
+			best_score = score
+			best_category = category
+
+	if best_category == -1:
+		push_warning("GameState.auto_confirm_least_damaging: 확정 안 한 칸이 없음(game_over 판정과 모순되는 비정상 상태)")
+		return -1
+
+	confirm_category(best_category)
+	return best_category
+
+
 func is_category_confirmed(player: int, category_index: int) -> bool:
 	return player_score_confirmed[player][category_index]
 
