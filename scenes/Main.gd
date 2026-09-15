@@ -30,6 +30,12 @@ var active_controller
 # GameState/GameClient가 아니라 이 값만 화면이 직접 들고 읽는다.
 var my_player_index: int = -1
 
+# 온라인 로비의 [캐릭터 선택]이 1-6의 CharacterSelectScreen을 그대로
+# 빌려 쓸 때(2-4B), 그 결과가 로컬 새 게임 시작인지 온라인 캐릭터
+# 선택인지 구분하는 플래그. 기본값 false라 로컬 흐름은 코드 경로가
+# 전혀 안 바뀐다. 분기는 이 플래그를 보는 두 핸들러 안에서만 일어난다.
+var _character_select_for_online: bool = false
+
 var locked_style := StyleBoxFlat.new()
 var column_normal_style := StyleBoxFlat.new()
 var column_highlight_style := StyleBoxFlat.new()
@@ -207,6 +213,7 @@ func _ready() -> void:
 
 	online_screen.back_requested.connect(_on_online_back_requested)
 	online_screen.game_play_started.connect(_on_online_game_play_started)
+	online_screen.character_select_requested.connect(_on_online_character_select_requested)
 
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
@@ -330,7 +337,11 @@ func _on_start_pressed(player_count: int) -> void:
 
 
 func _on_character_select_back() -> void:
-	_show_screen(Screen.START)
+	if _character_select_for_online:
+		_character_select_for_online = false
+		_show_screen(Screen.ONLINE)
+	else:
+		_show_screen(Screen.START)
 
 
 ## [로컬 게임]/[온라인 게임] 중 하나를 고르기 전의 기본 상태로 되돌린다 -
@@ -361,8 +372,22 @@ func _on_online_back_requested() -> void:
 	_show_mode_choice()
 
 
+## 온라인 로비의 [캐릭터 선택] 버튼 - 1-6의 CharacterSelectScreen을 1인분만
+## 잠깐 빌려 쓴다(새 화면을 안 만듦). 결과는 _on_character_selection_confirmed()가
+## _character_select_for_online 플래그를 보고 온라인 쪽으로 돌려준다.
+func _on_online_character_select_requested() -> void:
+	_character_select_for_online = true
+	character_select_screen.configure(1)
+	_show_screen(Screen.CHARACTER_SELECT)
+
+
 func _on_character_selection_confirmed(profiles: Array[CharacterProfile]) -> void:
-	_start_new_game(profiles)
+	if _character_select_for_online:
+		_character_select_for_online = false
+		online_screen.set_my_profile(profiles[0])
+		_show_screen(Screen.ONLINE)
+	else:
+		_start_new_game(profiles)
 
 
 ## 캐릭터 편집 화면은 위 3화면과 달리 "덮어씌우는 오버레이"라 Screen enum에

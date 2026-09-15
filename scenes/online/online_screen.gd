@@ -13,14 +13,26 @@ signal back_requested()
 ## _client(자식 노드)의 _process()는 계속 돌아 패킷을 받는다.
 signal game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile])
 
+## [캐릭터 선택] 버튼을 누르면 emit한다 - Main.gd가 1-6의
+## CharacterSelectScreen을 1인분(configure(1))만 빌려 보여주고, 결과를
+## set_my_profile()로 돌려준다(2-4B). 새 캐릭터 선택 화면을 따로 안 만든다.
+signal character_select_requested()
+
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8910"
-const DEFAULT_NICKNAME := "플레이어"
 
 var _client: GameClient = GameClient.new()
 
+## 내가 고른 캐릭터(2-4B) - 게임 화면이 처음 뜰 때 CharacterLibrary의
+## 첫 항목(내장 기본 포함이라 항상 1개 이상)으로 기본값을 잡아둬서,
+## [캐릭터 선택]을 안 눌러도 항상 유효한 프로필이 붙어 있게 한다.
+var _my_profile: CharacterProfile
+
 @onready var _connect_panel: VBoxContainer = $CenterContainer/VBox/ConnectPanel
 @onready var _server_address_edit: LineEdit = $CenterContainer/VBox/ConnectPanel/ServerRow/ServerAddressEdit
-@onready var _nickname_edit: LineEdit = $CenterContainer/VBox/ConnectPanel/NicknameRow/NicknameEdit
+@onready var _my_thumbnail: TextureRect = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/ThumbnailClip/ThumbnailTexture
+@onready var _my_thumbnail_clip: Control = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/ThumbnailClip
+@onready var _my_name_label: Label = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/NameLabel
+@onready var _select_character_button: Button = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/SelectCharacterButton
 @onready var _connect_status_label: Label = $CenterContainer/VBox/ConnectPanel/ConnectStatusLabel
 @onready var _create_room_button: Button = $CenterContainer/VBox/ConnectPanel/ActionButtonsRow/CreateRoomButton
 @onready var _join_room_button: Button = $CenterContainer/VBox/ConnectPanel/ActionButtonsRow/JoinRoomButton
@@ -50,10 +62,11 @@ var _connected := false
 func _ready() -> void:
 	add_child(_client)
 	_server_address_edit.text = DEFAULT_SERVER_URL
-	_nickname_edit.text = DEFAULT_NICKNAME
-	# 길이 상한은 서버와 공유하는 값(NetProtocol)을 그대로 써서 입력창에서부터
-	# 막는다 - 실제 방어선은 서버 쪽 검사고, 이건 UX용이다.
-	_nickname_edit.max_length = NetProtocol.MAX_DISPLAY_NAME_LENGTH
+
+	var default_profiles := CharacterLibrary.get_selectable_profiles()
+	if not default_profiles.is_empty():
+		_my_profile = default_profiles[0]
+	_refresh_my_character_display()
 
 	_create_room_button.pressed.connect(func() -> void: _create_room_count_row.visible = true)
 	_join_room_button.pressed.connect(func() -> void: _join_room_row.visible = true)
@@ -61,6 +74,10 @@ func _ready() -> void:
 	_join_confirm_button.pressed.connect(_on_join_confirm_pressed)
 	_leave_button.pressed.connect(_on_leave_pressed)
 	_ready_button.pressed.connect(_on_ready_button_pressed)
+	_select_character_button.pressed.connect(func() -> void: character_select_requested.emit())
+	# character_select_panel.gd와 같은 이유 - 처음 그려질 때는 클립 박스
+	# 크기가 아직 (0,0)일 수 있어서, 실제 크기가 잡히면 다시 맞춘다.
+	_my_thumbnail_clip.resized.connect(_refresh_my_character_display)
 
 	for count in [2, 3, 4]:
 		var create_button: Button = _create_room_count_row.get_node("Create%dButton" % count)
@@ -89,6 +106,26 @@ func _ready() -> void:
 func reset_to_start() -> void:
 	_client.close()
 	_show_connect_panel()
+
+
+## Main.gd가 1-6의 CharacterSelectScreen(1인분)에서 고른 결과를 돌려줄 때
+## 부른다(2-4B) - character_select_requested를 emit한 뒤 대응.
+func set_my_profile(profile: CharacterProfile) -> void:
+	_my_profile = profile
+	_refresh_my_character_display()
+
+
+## character_select_panel.gd의 슬롯 썸네일 갱신과 같은 방식
+## (CharacterPortrait.resolve_thumbnail_texture()/TextureFit.fit()) -
+## 새 로직 없이 그대로 재사용한다.
+func _refresh_my_character_display() -> void:
+	if _my_profile == null:
+		_my_name_label.text = "캐릭터 없음"
+		return
+
+	_my_name_label.text = _my_profile.display_name
+	var center_crop := CharacterPortrait.thumbnail_should_center_crop(_my_profile)
+	TextureFit.fit(_my_thumbnail, CharacterPortrait.resolve_thumbnail_texture(_my_profile), _my_thumbnail_clip.size, true, 0.5 if center_crop else 0.0)
 
 
 func _show_connect_panel() -> void:
@@ -180,7 +217,7 @@ func _on_room_created(code: String, player_count: int, _reconnect_token: String)
 	# 발급된 토큰은 저장까지만 한다(2-6에서 실제 재접속 매칭 구현) - 지금은
 	# 새로고침 후 복귀 UI가 없어도 저장은 해둔다.
 	SessionStore.save(code, _reconnect_token, 0)
-	_client.select_character({"id": "", "display_name": _resolve_nickname(0)})
+	_client.select_character(_my_character_meta())
 	_show_lobby_panel()
 
 
@@ -191,19 +228,24 @@ func _on_room_joined(players: Array, my_index: int, reconnect_token: String, pla
 	for entry in players:
 		_players[int(entry["player_index"])] = {"meta": entry.get("meta", {}), "ready": entry.get("ready", false)}
 	SessionStore.save(_room_code, reconnect_token, my_index)
-	_client.select_character({"id": "", "display_name": _resolve_nickname(my_index)})
+	_client.select_character(_my_character_meta())
 	_show_lobby_panel()
 
 
-## 서버가 최종 검증/기본값 부여를 다시 하므로(server_main.gd,
-## 원칙 6 - 클라이언트만 믿지 않는다) 이 함수는 UX용이다: 입력창 내용을
-## 정리하고, 정리한 결과가 비어 있으면(제어문자만 입력했거나 공백뿐이면)
-## "플레이어 N"으로 미리 채워서 보여준다.
-func _resolve_nickname(player_index: int) -> String:
-	var cleaned := NetProtocol.sanitize_display_name(_nickname_edit.text)
-	if cleaned.is_empty():
-		return "플레이어 %d" % (player_index + 1)
-	return cleaned
+## 서버가 최종 검증/기본값 부여를 다시 하므로(server_main.gd, 원칙 6 -
+## 클라이언트만 믿지 않는다) 여기서 하는 정리는 UX용이다. id는 문서가
+## 이미 정의해둔 필드에 처음으로 실제 값을 채우는 것뿐이라 프로토콜
+## 변경이 아니다(2-4B) - 2-5에서 캐릭터 팩을 요청할 때 쓸 수 있게 미리
+## 채워둔다.
+func _my_character_meta() -> Dictionary:
+	var display_name := ""
+	var id := ""
+	if _my_profile != null:
+		display_name = NetProtocol.sanitize_display_name(_my_profile.display_name)
+		id = _my_profile.id
+	if display_name.is_empty():
+		display_name = "플레이어 %d" % (_my_index + 1)
+	return {"id": id, "display_name": display_name}
 
 
 func _on_player_joined(player_index: int, meta: Dictionary) -> void:
@@ -235,16 +277,22 @@ func _on_player_left(player_index: int, _reason: String) -> void:
 	_refresh_lobby_ui()
 
 
-## v1 온라인은 실제 캐릭터(초상/보이스)가 없다(2-3에서 정함, 문서 §8) -
-## 로비에서 모은 닉네임만 채운 빈 CharacterProfile을 만든다. voice_map이
-## 비어 있으므로 VoiceBank/특수 족보 연출은 "매핑 없는 캐릭터" 경로를
-## 그대로 타서(기존 로컬 코드 그대로) 텍스트 팝업·효과음은 정상 동작하고
-## 캐릭터 보이스만 조용하다 - 2-5에서 실제 데이터가 오가면 채워진다.
+## 내 슬롯만 내가 실제로 고른 CharacterProfile을 그대로 쓴다(2-4B) - 내
+## 캐릭터는 이미 이 컴퓨터에 있으니 네트워크로 받을 필요가 없다. 남의
+## 슬롯은 여전히 닉네임만 채운 빈 CharacterProfile(voice_map 비어있음,
+## 실루엣 폴백)이다 - 2-3이 정한 v1 범위(문서 §8) 그대로, 2-5에서 실제
+## 캐릭터 팩이 오가면 채워진다. 이 배열이 그대로 VoiceBank.configure()/
+## _build_character_area()/_build_scoreboard()로 넘어가므로(2-4에서 이미
+## 뚫어놓은 경로) 그 함수들은 손댈 필요가 없다 - 로컬에서 "일부만 캐릭터를
+## 설정한 다인 게임"과 입력 모양이 똑같다.
 func _on_game_started(player_count: int) -> void:
 	print("[온라인] 게임 시작! (%d인)" % player_count)
 
 	var profiles: Array[CharacterProfile] = []
 	for i in player_count:
+		if i == _my_index and _my_profile != null:
+			profiles.append(_my_profile)
+			continue
 		var profile := CharacterProfile.new()
 		var display_name: String = _players.get(i, {}).get("meta", {}).get("display_name", "")
 		profile.display_name = display_name if not display_name.is_empty() else "플레이어 %d" % (i + 1)
