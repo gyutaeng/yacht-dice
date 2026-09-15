@@ -10,7 +10,12 @@ signal storage_write_failed()
 
 const AUDIO_EXTENSIONS: Array[String] = ["wav", "ogg", "mp3"]
 
+# CharacterLimits는 이 파일 작성 시점에 막 추가된 class_name이라, 전역 스크립트
+# 클래스 캐시가 아직 못 봤을 수 있는 배포 환경을 대비해 preload로 직접 참조한다.
+const CharacterLimitsScript = preload("res://scripts/characters/character_limits.gd")
+
 @onready var _rows_container: VBoxContainer = $Scroll/RowsContainer
+@onready var _limit_dialog: AcceptDialog = $LimitDialog
 
 var _profile: CharacterProfile
 var _picker: FilePicker
@@ -186,6 +191,10 @@ func _on_pick_cancelled() -> void:
 	_set_add_buttons_disabled(false)
 
 
+## 여러 개를 한 번에 고를 수 있어서(데스크톱), 파일마다 결과가 다를 수 있다
+## (일부는 저장되고 일부는 거부됨) - 그래서 거부/권고 메시지를 파일별로 모아뒀다가
+## 전부 처리한 뒤 한 번에 다이얼로그로 보여준다. 각 파일은 독립적으로
+## 검사한다(하나가 걸렸다고 나머지까지 막지 않음).
 func _on_files_picked(files: Array) -> void:
 	_picker_busy = false
 
@@ -194,17 +203,30 @@ func _on_files_picked(files: Array) -> void:
 		return
 
 	var any_saved := false
+	var messages: Array[String] = []
+
 	for entry in files:
 		var bytes: PackedByteArray = entry.bytes
+		var file_name: String = entry.name
 
+		# AssetLoader의 2MB는 "이보다 크면 디코딩도 시도 안 하는" 최후 방어선이다.
+		# CharacterLimits의 권장 상한(1MB)이 항상 이보다 작아 정상적으로는 아래
+		# CharacterLimits 검사에서 먼저 걸리지만, 방어적으로 그대로 유지한다.
 		if bytes.size() > AssetLoader.MAX_AUDIO_BYTES:
-			push_warning("VoiceMappingPanel: 오디오가 크기 상한을 초과함(%d바이트) - %s" % [bytes.size(), entry.name])
+			messages.append("%s: %s로 너무 커서 열어볼 수조차 없습니다(최대 %s)." % [
+				file_name, CharacterLimitsScript.format_bytes(bytes.size()), CharacterLimitsScript.format_bytes(AssetLoader.MAX_AUDIO_BYTES)
+			])
 			continue
 		if AssetLoader.load_audio_from_bytes(bytes) == null:
-			push_warning("VoiceMappingPanel: 오디오 디코딩 실패 - %s" % entry.name)
+			messages.append("%s: 열 수 없습니다 - 지원하지 않는 형식이거나 파일이 손상되었을 수 있습니다." % file_name)
 			continue
 
-		var saved_name := CharacterLibrary.save_asset_bytes(_profile.id, "voices", entry.name, bytes)
+		var check := CharacterLimitsScript.check_voice(bytes.size(), file_name)
+		if not check["ok"]:
+			messages.append("%s: %s" % [file_name, check["message"]])
+			continue
+
+		var saved_name := CharacterLibrary.save_asset_bytes(_profile.id, "voices", file_name, bytes)
 		if saved_name.is_empty():
 			storage_write_failed.emit()
 			continue
@@ -214,6 +236,12 @@ func _on_files_picked(files: Array) -> void:
 		_profile.voice_map[_pending_event_key] = files_for_key
 		any_saved = true
 
+		if check["advisory"] != "":
+			messages.append("%s: %s" % [file_name, check["advisory"]])
+
 	_rebuild_rows()  # 버튼 재활성화까지 포함해서 다시 그린다.
 	if any_saved:
 		changed.emit()
+	if not messages.is_empty():
+		_limit_dialog.dialog_text = "\n\n".join(messages)
+		_limit_dialog.popup_centered()

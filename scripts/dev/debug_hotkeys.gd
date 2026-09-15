@@ -70,6 +70,8 @@ const FORCED_HAND_DICE := {
 	"force_four_of_a_kind": [2, 2, 2, 2, 5],
 }
 
+const DEBUG_BUTTON_MARGIN := 12.0
+
 # 디버그 버튼에 쓸 짧은 라벨. KEY_ACTIONS와 순서를 맞춰서 버튼 순서가 위 주석의
 # Ctrl+Shift+1~4/S/A 순서와 같게 한다.
 const BUTTON_LABELS := {
@@ -137,8 +139,23 @@ func _build_debug_button_panel() -> void:
 	layer.layer = 100  # InputBlocker 등 게임 UI보다 확실히 위.
 	add_child(layer)
 
+	# 우하단 모서리에 고정하되, 이 시점엔 버튼을 아직 안 넣어서 크기를 모른다.
+	# anchor_*=1(우하단 모서리)에 offset_left/right를 같은 값으로 둬서 앵커
+	# 사각형 자체를 폭 0인 점으로 만들고, grow_direction을 BEGIN(왼쪽/위로
+	# 자라는 방향)으로 주면 나중에 버튼이 늘어나 최소 크기가 커져도 항상 이
+	# 점을 기준으로 화면 안쪽으로만 자란다 - 그래서 크기 계산 순서나 창 크기
+	# 변화와 무관하게 절대 화면 밖으로 잘리지 않는다. (버튼을 72x22->104x34로
+	# 키우면서 set_anchors_and_offsets_preset(MODE_MINSIZE)를 쓰다가 버튼을
+	# 넣기 전 크기(0,0) 기준으로 앵커가 고정돼버려서 패널이 화면 밖으로
+	# 밀려나는 버그가 났다 - 그 수정.)
 	var vbox := VBoxContainer.new()
-	vbox.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT, Control.PRESET_MODE_MINSIZE, 8)
+	vbox.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	vbox.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	vbox.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	vbox.offset_left = -DEBUG_BUTTON_MARGIN
+	vbox.offset_right = -DEBUG_BUTTON_MARGIN
+	vbox.offset_top = -DEBUG_BUTTON_MARGIN
+	vbox.offset_bottom = -DEBUG_BUTTON_MARGIN
 	vbox.modulate = Color(1, 1, 1, 0.8)
 	vbox.add_theme_constant_override("separation", 4)
 	layer.add_child(vbox)

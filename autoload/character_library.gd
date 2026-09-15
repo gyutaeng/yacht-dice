@@ -12,7 +12,15 @@ const CHARACTERS_DIR := "user://characters"
 const MANIFEST_FILENAME := "manifest.json"
 const BUILTIN_FALLBACK_PATH := "res://characters/default"
 
+# 1-7 캐릭터 팩(.zip으로 내보내기/가져오기). 포맷은 docs/character_pack.md에
+# 문서화되어 있다 - Phase 2에서 네트워크로 이 zip을 그대로 전송할 예정이라
+# 여기 상수를 바꾸면 그 문서도 같이 갱신할 것.
+const PACK_FILE_SUFFIX := ".ydchar.zip"
+const PACK_ALLOWED_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "wav", "ogg", "mp3", "json"]
+const PACK_MAX_UNCOMPRESSED_BYTES := 50 * 1024 * 1024  # 50MB - 압축률 폭탄 방지용 상한.
+
 const CharacterProfileScript = preload("res://scripts/characters/character_profile.gd")
+const CharacterLimitsScript = preload("res://scripts/characters/character_limits.gd")
 
 
 ## 프로필의 파일 하나(초상/썸네일/보이스)를 읽는 진입점을 여기 하나로 모은다.
@@ -123,7 +131,15 @@ func save_profile(profile: CharacterProfile) -> bool:
 ## 직접 만들기 때문에(호출부가 경로를 넘기지 않음) CHARACTERS_DIR 바깥을 건드릴 수 없다.
 func _cleanup_unreferenced_files(profile: CharacterProfile) -> void:
 	var dir_path := CHARACTERS_DIR.path_join(profile.id)
+	_delete_unreferenced_in_dir(dir_path, "", _referenced_files(profile))
 
+
+## manifest.json이 실제로 가리키는 파일 집합(프로필 폴더 기준 상대경로 -> true).
+## 저장 시 고아 파일 정리(_cleanup_unreferenced_files)와 팩 내보내기
+## (export_pack_bytes) 둘 다 "이 캐릭터에 실제로 필요한 파일이 뭔지"를 같은
+## 기준으로 판단해야 하므로 여기 하나로 모은다 - thumbnail_file을 빠뜨리면
+## 내보내기에서도 똑같이 빠지는 사고를 막기 위함.
+func _referenced_files(profile: CharacterProfile) -> Dictionary:
 	var referenced := {MANIFEST_FILENAME: true}
 	if profile.portrait_file != "":
 		referenced[profile.portrait_file] = true
@@ -132,8 +148,27 @@ func _cleanup_unreferenced_files(profile: CharacterProfile) -> void:
 	for key in profile.voice_map:
 		for filename in profile.voice_map[key]:
 			referenced[filename] = true
+	return referenced
 
-	_delete_unreferenced_in_dir(dir_path, "", referenced)
+
+## profile이 실제로 디스크에서 차지하는 전체 용량(바이트) - 초상+썸네일+보이스
+## 전부 합. 편집 화면의 "현재 캐릭터 용량" 표시와 팩 가져오기 시의 크기 경고가
+## 함께 쓴다. _referenced_files()가 "지금 이 프로필이 실제로 가리키는 파일이
+## 뭔지"를 이미 계산해주므로 그 파일들의 디스크 상 크기만 더하면 된다 -
+## 아직 save_profile()로 저장 안 한 상태(방금 고른 파일이 디스크엔 있지만
+## manifest.json엔 아직 안 적힌 시점)에도 정확하다.
+func compute_pack_size(profile: CharacterProfile) -> int:
+	if profile == null:
+		return 0
+
+	var dir_path := CHARACTERS_DIR.path_join(profile.id)
+	var total := 0
+	for relative_path in _referenced_files(profile).keys():
+		var file := FileAccess.open(dir_path.path_join(relative_path), FileAccess.READ)
+		if file != null:
+			total += file.get_length()
+			file.close()
+	return total
 
 
 func _delete_unreferenced_in_dir(root_dir: String, relative_prefix: String, referenced: Dictionary) -> void:
@@ -201,6 +236,256 @@ func _unique_filename(dir_path: String, desired_filename: String) -> String:
 		suffix += 1
 
 	return candidate
+
+
+## profile을 하나의 zip 바이트로 묶는다(파일 포맷은 docs/character_pack.md
+## 참고). manifest.json은 디스크 파일을 그대로 복사하지 않고 profile.to_dict()로
+## 새로 쓴다 - 그래야 아직 디스크에 반영 안 된 값이 하나도 없다는 보장 없이도
+## (호출부가 export 전에 save_profile을 이미 했다는 것에 의존하지 않고) 항상
+## 지금 메모리 상의 최신 상태와 일치한다. 나머지 파일은 _referenced_files()가
+## 가리키는 것만 담는다(고아 파일은 애초에 안 담김).
+func export_pack_bytes(profile: CharacterProfile) -> PackedByteArray:
+	if profile == null or profile.is_builtin:
+		push_error("CharacterLibrary.export_pack_bytes: 내장 캐릭터는 내보낼 수 없음")
+		return PackedByteArray()
+
+	var dir_path := CHARACTERS_DIR.path_join(profile.id)
+	var referenced := _referenced_files(profile)
+
+	var tmp_path := "user://.tmp_export_%d.zip" % Time.get_ticks_usec()
+	var packer := ZIPPacker.new()
+	if packer.open(tmp_path) != OK:
+		push_error("CharacterLibrary.export_pack_bytes: 임시 zip을 열 수 없음 - %s" % tmp_path)
+		return PackedByteArray()
+
+	_zip_write_entry(packer, MANIFEST_FILENAME, JSON.stringify(profile.to_dict(), "\t").to_utf8_buffer())
+
+	for relative_path in referenced.keys():
+		if relative_path == MANIFEST_FILENAME:
+			continue
+		var file := FileAccess.open(dir_path.path_join(relative_path), FileAccess.READ)
+		if file == null:
+			push_warning("CharacterLibrary.export_pack_bytes: 파일을 읽을 수 없어 건너뜀 - %s" % relative_path)
+			continue
+		_zip_write_entry(packer, relative_path, file.get_buffer(file.get_length()))
+		file.close()
+
+	packer.close()
+
+	var zip_bytes := PackedByteArray()
+	var zip_file := FileAccess.open(tmp_path, FileAccess.READ)
+	if zip_file != null:
+		zip_bytes = zip_file.get_buffer(zip_file.get_length())
+		zip_file.close()
+	DirAccess.remove_absolute(tmp_path)
+
+	return zip_bytes
+
+
+func _zip_write_entry(packer: ZIPPacker, entry_name: String, bytes: PackedByteArray) -> void:
+	packer.start_file(entry_name)
+	packer.write_file(bytes)
+	packer.close_file()
+
+
+## 남이 만든 zip 파일을 여는 기능이므로 내용을 전혀 신뢰하지 않는다(원칙 6).
+## 아래를 전부 통과해야만 디스크에 한 바이트라도 쓴다 - 하나라도 걸리면
+## 무엇도 기록하지 않고 실패 이유를 한국어 문자열로 돌려준다:
+## - manifest.json이 있고 CharacterProfile 스키마를 통과해야 한다.
+## - 모든 항목의 경로가 안전해야 한다(".."/절대경로/백슬래시 금지 - zip slip 방지).
+## - 모든 항목의 확장자가 화이트리스트 안에 있어야 한다.
+## - 압축을 푼 전체 크기가 PACK_MAX_UNCOMPRESSED_BYTES(50MB)를 넘으면 안 된다.
+##   (ZIPReader에는 압축 해제 전에 크기만 미리 물어볼 방법이 없어서, 항목을 하나
+##   읽을 때마다 즉시 크기를 누적 검사한다 - 항목 하나가 통째로 거대한 경우
+##   그 한 번의 read_file() 호출 자체가 메모리를 크게 잡을 수 있다는 한계는
+##   있지만, "여러 항목의 합이 상한을 넘는" 흔한 폭탄은 디스크에 쓰기 전에 막는다.)
+##
+## id는 항상 새로 발급한다 - 기존 캐릭터를 덮어쓰지 않는다. 반환값:
+## {"ok": bool, "error": String, "profile": CharacterProfile}(실패 시 profile은 null).
+func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
+	if zip_bytes.is_empty():
+		return _import_error("빈 파일입니다.")
+
+	var tmp_path := "user://.tmp_import_%d.zip" % Time.get_ticks_usec()
+	var tmp_file := FileAccess.open(tmp_path, FileAccess.WRITE)
+	if tmp_file == null:
+		return _import_error("임시 파일을 만들 수 없습니다.")
+	tmp_file.store_buffer(zip_bytes)
+	tmp_file.close()
+
+	var reader := ZIPReader.new()
+	if reader.open(tmp_path) != OK:
+		DirAccess.remove_absolute(tmp_path)
+		return _import_error("zip 파일을 열 수 없습니다. 손상되었거나 zip 형식이 아닙니다.")
+
+	var entries := reader.get_files()
+	if not entries.has(MANIFEST_FILENAME):
+		reader.close()
+		DirAccess.remove_absolute(tmp_path)
+		return _import_error("manifest.json이 없습니다. 캐릭터 팩(.ydchar.zip) 파일이 맞는지 확인하세요.")
+
+	var file_entries: Array[String] = []
+	for entry_path in entries:
+		if entry_path.ends_with("/"):
+			continue  # 디렉터리 항목 자체는 검사할 내용이 없으니 건너뜀.
+		if not _is_safe_pack_path(entry_path):
+			reader.close()
+			DirAccess.remove_absolute(tmp_path)
+			return _import_error("안전하지 않은 경로가 들어 있어 거부합니다: \"%s\"" % entry_path)
+		var ext := entry_path.get_extension().to_lower()
+		if not PACK_ALLOWED_EXTENSIONS.has(ext):
+			reader.close()
+			DirAccess.remove_absolute(tmp_path)
+			return _import_error("허용되지 않는 파일 형식이 들어 있어 거부합니다: \"%s\"" % entry_path)
+		file_entries.append(entry_path)
+
+	var manifest_bytes := reader.read_file(MANIFEST_FILENAME)
+	var parsed = JSON.parse_string(manifest_bytes.get_string_from_utf8())
+	if not (parsed is Dictionary):
+		reader.close()
+		DirAccess.remove_absolute(tmp_path)
+		return _import_error("manifest.json이 올바른 JSON 형식이 아닙니다.")
+
+	var manifest_profile := CharacterProfileScript.from_dict(parsed, "가져온 팩")
+	if manifest_profile == null:
+		reader.close()
+		DirAccess.remove_absolute(tmp_path)
+		return _import_error("manifest.json의 형식이 올바르지 않습니다(버전 또는 필드 오류).")
+
+	var extracted: Dictionary = {}  # 프로필 폴더 기준 상대경로 -> PackedByteArray
+	var total_bytes := manifest_bytes.size()
+	for entry_path in file_entries:
+		if entry_path == MANIFEST_FILENAME:
+			continue
+		var bytes := reader.read_file(entry_path)
+		total_bytes += bytes.size()
+		if total_bytes > PACK_MAX_UNCOMPRESSED_BYTES:
+			reader.close()
+			DirAccess.remove_absolute(tmp_path)
+			return _import_error("압축을 풀었을 때 크기가 50MB를 넘어 거부합니다.")
+		extracted[entry_path] = bytes
+
+	reader.close()
+	DirAccess.remove_absolute(tmp_path)
+
+	_drop_missing_references(manifest_profile, extracted)
+
+	var new_id := _generate_unique_id(manifest_profile.id)
+	var dest_dir := CHARACTERS_DIR.path_join(new_id)
+	if DirAccess.make_dir_recursive_absolute(dest_dir) != OK:
+		return _import_error("캐릭터 폴더를 만들 수 없습니다.")
+
+	for relative_path in extracted:
+		var full_path: String = dest_dir.path_join(relative_path)
+		if DirAccess.make_dir_recursive_absolute(full_path.get_base_dir()) != OK:
+			_remove_dir_recursive(dest_dir)
+			return _import_error("파일을 저장할 폴더를 만들 수 없습니다: \"%s\"" % relative_path)
+		var out_file := FileAccess.open(full_path, FileAccess.WRITE)
+		if out_file == null:
+			_remove_dir_recursive(dest_dir)
+			return _import_error("파일을 쓸 수 없습니다: \"%s\"" % relative_path)
+		out_file.store_buffer(extracted[relative_path])
+		out_file.close()
+
+	var new_profile := CharacterProfileScript.new()
+	new_profile.id = new_id
+	new_profile.display_name = manifest_profile.display_name
+	new_profile.portrait_file = manifest_profile.portrait_file
+	new_profile.thumbnail_file = manifest_profile.thumbnail_file
+	new_profile.voice_map = manifest_profile.voice_map.duplicate(true)
+	new_profile.volume_db = manifest_profile.volume_db
+
+	if not save_profile(new_profile):
+		_remove_dir_recursive(dest_dir)
+		return _import_error("manifest.json을 저장할 수 없습니다.")
+
+	return {"ok": true, "error": "", "profile": new_profile, "warning": _pack_size_advisory(new_profile, extracted)}
+
+
+## 가져오기는 이미 통과한(신뢰 검증 완료) 팩에 대해 "거부"가 아니라 "권고"만
+## 한다 - 편집 화면에서 새로 올릴 때 쓰는 것과 같은 CharacterLimits 기준을
+## 재사용하되, 남이 이미 만든 파일이니 못 쓰게 막을 이유는 없다. 문제가 하나도
+## 없으면 빈 문자열을 돌려준다.
+func _pack_size_advisory(profile: CharacterProfile, extracted: Dictionary) -> String:
+	var issues: Array[String] = []
+
+	if profile.portrait_file != "" and extracted.has(profile.portrait_file):
+		var bytes: PackedByteArray = extracted[profile.portrait_file]
+		var texture := AssetLoader.load_texture_from_bytes(bytes)
+		if texture != null:
+			var check := CharacterLimitsScript.check_image(texture.get_width(), texture.get_height(), bytes.size(), "portrait")
+			if not check["ok"]:
+				issues.append("스탠딩 이미지 - %s" % check["message"])
+
+	if profile.thumbnail_file != "" and extracted.has(profile.thumbnail_file):
+		var bytes: PackedByteArray = extracted[profile.thumbnail_file]
+		var texture := AssetLoader.load_texture_from_bytes(bytes)
+		if texture != null:
+			var check := CharacterLimitsScript.check_image(texture.get_width(), texture.get_height(), bytes.size(), "thumbnail")
+			if not check["ok"]:
+				issues.append("썸네일 - %s" % check["message"])
+
+	for key in profile.voice_map:
+		for filename in profile.voice_map[key]:
+			if not extracted.has(filename):
+				continue
+			var bytes: PackedByteArray = extracted[filename]
+			var check := CharacterLimitsScript.check_voice(bytes.size(), filename)
+			if not check["ok"]:
+				issues.append("보이스(%s) - %s" % [filename.get_file(), check["message"]])
+
+	var total := compute_pack_size(profile)
+	if total > CharacterLimitsScript.TOTAL_WARNING_BYTES:
+		issues.append("전체 용량 %s로 권장 상한(%s)을 넘었습니다. 온라인에서 상대에게 전송되지 않을 수 있습니다." % [
+			CharacterLimitsScript.format_bytes(total), CharacterLimitsScript.format_bytes(CharacterLimitsScript.TOTAL_WARNING_BYTES)
+		])
+
+	return "\n\n".join(issues)
+
+
+## manifest이 가리키는데 실제로는 zip 안에 없던 파일은 조용히 참조를 지운다
+## (팩 전체를 거부하는 대신). 이런 팩은 애초에 우리 exporter가 만든 게
+## 아니거나 손상된 것이지만, 초상/보이스 하나가 없다고 캐릭터 전체를 못 쓰게
+## 할 필요는 없다 - CharacterPortrait/VoiceBank가 어차피 파일이 없으면 폴백
+## 처리를 이미 하고 있다.
+func _drop_missing_references(profile: CharacterProfile, extracted: Dictionary) -> void:
+	if profile.portrait_file != "" and not extracted.has(profile.portrait_file):
+		push_warning("CharacterLibrary.import_pack: portrait_file이 zip에 없어 무시함 - %s" % profile.portrait_file)
+		profile.portrait_file = ""
+	if profile.thumbnail_file != "" and not extracted.has(profile.thumbnail_file):
+		push_warning("CharacterLibrary.import_pack: thumbnail_file이 zip에 없어 무시함 - %s" % profile.thumbnail_file)
+		profile.thumbnail_file = ""
+
+	var sanitized_voice_map := {}
+	for key in profile.voice_map:
+		var kept: Array[String] = []
+		for filename in profile.voice_map[key]:
+			if extracted.has(filename):
+				kept.append(filename)
+			else:
+				push_warning("CharacterLibrary.import_pack: 보이스 파일이 zip에 없어 무시함 - %s" % filename)
+		if not kept.is_empty():
+			sanitized_voice_map[key] = kept
+	profile.voice_map = sanitized_voice_map
+
+
+## zip 항목 경로가 프로필 폴더 밖으로 나가지 않는지 검사한다(zip slip 방지).
+## ZIPReader/Godot의 경로 함수는 항상 "/"만 경로 구분자로 다루므로 백슬래시
+## 자체는 여기서 당장 탈출에 못 쓰이지만, 이 문자가 들어있는 zip은 다른 도구
+## (Windows 탐색기 등에서 그대로 풀 때)에서 위험할 수 있어 방어적으로 같이 거부한다.
+func _is_safe_pack_path(path: String) -> bool:
+	if path.is_empty():
+		return false
+	if path.contains("\\") or path.contains(".."):
+		return false
+	if path.is_absolute_path():
+		return false
+	return true
+
+
+func _import_error(message: String) -> Dictionary:
+	push_warning("CharacterLibrary.import_pack: %s" % message)
+	return {"ok": false, "error": message, "profile": null}
 
 
 func create_new(display_name: String) -> CharacterProfile:

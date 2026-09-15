@@ -45,9 +45,25 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 24
 text = "캐릭터 관리"
 
+[node name="PackSizeLabel" type="Label" parent="Margin/Root/TopBar"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = ""
+
 [node name="Spacer" type="Control" parent="Margin/Root/TopBar"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="ImportButton" type="Button" parent="Margin/Root/TopBar"]
+custom_minimum_size = Vector2(100, 44)
+layout_mode = 2
+text = "가져오기"
+
+[node name="ExportButton" type="Button" parent="Margin/Root/TopBar"]
+custom_minimum_size = Vector2(100, 44)
+layout_mode = 2
+disabled = true
+text = "내보내기"
 
 [node name="SaveButton" type="Button" parent="Margin/Root/TopBar"]
 custom_minimum_size = Vector2(120, 44)
@@ -222,6 +238,18 @@ custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 text = "0.0 dB"
 
+[node name="LimitDialog" type="AcceptDialog" parent="Margin/Root/HBox/CenterPanel"]
+title = "업로드 제한"
+initial_position = 1
+dialog_text = ""
+
+[node name="ResizeConfirmDialog" type="ConfirmationDialog" parent="Margin/Root/HBox/CenterPanel"]
+title = "이미지가 너무 큽니다"
+initial_position = 1
+ok_button_text = "자동으로 줄여서 넣기"
+dialog_text = ""
+cancel_button_text = "취소"
+
 [node name="RightPanel" type="VBoxContainer" parent="Margin/Root/HBox"]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -242,6 +270,11 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
+[node name="LimitDialog" type="AcceptDialog" parent="Margin/Root/HBox/RightPanel"]
+title = "업로드 제한"
+initial_position = 1
+dialog_text = ""
+
 [node name="UnsavedChangesDialog" type="ConfirmationDialog" parent="."]
 title = "저장하지 않은 변경사항"
 initial_position = 1
@@ -253,3 +286,32 @@ cancel_button_text = "취소"
 title = "저장 실패"
 initial_position = 1
 dialog_text = "브라우저가 저장을 막고 있어요. 캐릭터 팩으로 내보내서 보관하세요."
+
+[node name="ExportUnsavedDialog" type="ConfirmationDialog" parent="."]
+title = "저장하지 않은 변경사항"
+initial_position = 1
+ok_button_text = "저장하고 내보내기"
+dialog_text = "저장하지 않은 변경사항이 있습니다. 저장한 뒤 내보낼까요?"
+cancel_button_text = "취소"
+
+[node name="ExportSaveDialog" type="FileDialog" parent="."]
+title = "캐릭터 팩 저장"
+initial_position = 1
+size = Vector2i(720, 480)
+access = 2
+filters = PackedStringArray("*.ydchar.zip ; 캐릭터 팩")
+
+[node name="ImportErrorDialog" type="AcceptDialog" parent="."]
+title = "가져오기 실패"
+initial_position = 1
+dialog_text = ""
+
+[node name="ImportWarningDialog" type="AcceptDialog" parent="."]
+title = "가져오기 완료 - 알아둘 점"
+initial_position = 1
+dialog_text = ""
+
+[node name="PackSizeWarningDialog" type="AcceptDialog" parent="."]
+title = "용량 안내"
+initial_position = 1
+dialog_text = ""

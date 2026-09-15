@@ -19,6 +19,9 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_voice_bank.gd"),
 	preload("res://scripts/tests/suites/test_file_picker.gd"),
 	preload("res://scripts/tests/suites/test_character_library.gd"),
+	preload("res://scripts/tests/suites/test_character_pack.gd"),
+	preload("res://scripts/tests/suites/test_character_limits.gd"),
+	preload("res://scripts/tests/suites/test_character_editor_scene.gd"),
 	preload("res://scripts/tests/suites/test_game_start_builtin_only.gd"),
 ]
 
