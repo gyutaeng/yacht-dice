@@ -20,16 +20,30 @@ signal disconnected()
 
 # 2-4: 실제 게임 진행(docs/multiplayer.md §2.2). state_snapshot은 매번
 # 전체 상태를 담고 있어서(§5) OnlineGameController가 read_only GameState에
-# 그대로 apply_snapshot()한다. 나머지 6개는 "사건"이라 스냅샷 비교로는
+# 그대로 apply_snapshot()한다. 나머지는 "사건"이라 스냅샷 비교로는
 # 재현할 수 없고(§1) 서버가 스냅샷 뒤에 별도로 보낸다 - 클라이언트는 받은
 # 순서 그대로(스냅샷 먼저) 처리하기만 하면 된다.
+#
+# 어떤 GameEvents 시그널이 여기 대응 시그널을 갖는지는
+# scripts/net/game_event_relay.gd의 RELAYED_EVENTS가 기준이다(2-4C -
+# "게임에서 일어난 사건은 전부 전달한다", 예외는 score_previewed 하나뿐).
 signal state_snapshot_received(snapshot: Dictionary)
 signal dice_rolled(player_index: int, values: Array[int], rerolls_left: int)
+signal die_held_changed(player_index: int, index: int, held: bool)
 signal special_hand_rolled(player_index: int, category: int, points: int)
-signal bonus_achieved(player_index: int)
+signal score_committed(player_index: int, category: int, points: int)
+signal yacht_scored(player_index: int)
 signal zero_scored(player_index: int, category: int)
+signal bonus_achieved(player_index: int)
+signal turn_ended(player_index: int)
 signal turn_started(player_index: int)
 signal game_ended(winners: Array[int], scores: Array[int])
+## GameState.start_turn()이 내는 GameEvents.game_started를 실어 나른다 -
+## 로비가 다 찼을 때 오는 game_started(위, player_count만 담김)와는 다른
+## 신호다. 이름이 같으면 클라이언트가 게임 시작을 두 번(로비 종료 +
+## 이 이벤트) 받아서 인사 연출이 두 번 시작될 뻔했다(2-4C) - 그래서
+## 시그널 이름 자체를 다르게 뒀다.
+signal game_state_started(player_count: int)
 
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
@@ -177,16 +191,26 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 			state_snapshot_received.emit(payload)
 		NetProtocol.MSG_DICE_ROLLED:
 			dice_rolled.emit(int(payload.get("player_index", -1)), _to_int_array(payload.get("values", [])), int(payload.get("rerolls_left", 0)))
+		NetProtocol.MSG_DIE_HELD_CHANGED:
+			die_held_changed.emit(int(payload.get("player_index", -1)), int(payload.get("index", -1)), bool(payload.get("held", false)))
 		NetProtocol.MSG_SPECIAL_HAND_ROLLED:
 			special_hand_rolled.emit(int(payload.get("player_index", -1)), int(payload.get("category", -1)), int(payload.get("points", 0)))
-		NetProtocol.MSG_BONUS_ACHIEVED:
-			bonus_achieved.emit(int(payload.get("player_index", -1)))
+		NetProtocol.MSG_SCORE_COMMITTED:
+			score_committed.emit(int(payload.get("player_index", -1)), int(payload.get("category", -1)), int(payload.get("points", 0)))
+		NetProtocol.MSG_YACHT_SCORED:
+			yacht_scored.emit(int(payload.get("player_index", -1)))
 		NetProtocol.MSG_ZERO_SCORED:
 			zero_scored.emit(int(payload.get("player_index", -1)), int(payload.get("category", -1)))
+		NetProtocol.MSG_BONUS_ACHIEVED:
+			bonus_achieved.emit(int(payload.get("player_index", -1)))
+		NetProtocol.MSG_TURN_ENDED:
+			turn_ended.emit(int(payload.get("player_index", -1)))
 		NetProtocol.MSG_TURN_STARTED:
 			turn_started.emit(int(payload.get("player_index", -1)))
 		NetProtocol.MSG_GAME_ENDED:
 			game_ended.emit(_to_int_array(payload.get("winners", [])), _to_int_array(payload.get("scores", [])))
+		NetProtocol.MSG_GAME_STATE_STARTED:
+			game_state_started.emit(int(payload.get("player_count", 0)))
 		NetProtocol.MSG_ERROR:
 			var code := str(payload.get("code", ""))
 			if code == NetProtocol.ERROR_PROTOCOL_MISMATCH:

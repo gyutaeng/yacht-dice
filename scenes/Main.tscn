@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bahupo0io1w3n" path="res://scenes/Main.gd" id="1_script"]
 [ext_resource type="Script" uid="uid://yygi4w0ce8kc" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
-[ext_resource type="Script" path="res://scenes/character_select_panel.gd" id="4_select"]
+[ext_resource type="Script" uid="uid://dd05w20walh4d" path="res://scenes/character_select_panel.gd" id="4_select"]
 [ext_resource type="PackedScene" path="res://scenes/online/online_screen.tscn" id="5_online"]
 
 [node name="Main" type="Control" unique_id=344423488]
@@ -10,6 +10,8 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_script")
 
 [node name="StartScreen" type="Control" parent="." unique_id=1911768191]
@@ -33,24 +35,24 @@ theme_override_font_sizes/font_size = 40
 text = "요트다이스"
 horizontal_alignment = 1
 
-[node name="ModeChoiceRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox"]
+[node name="ModeChoiceRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox" unique_id=222027532]
 layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="LocalGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow"]
+[node name="LocalGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow" unique_id=671658343]
 custom_minimum_size = Vector2(140, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "로컬 게임"
 
-[node name="OnlineGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow"]
+[node name="OnlineGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow" unique_id=1893531462]
 custom_minimum_size = Vector2(140, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "온라인 게임"
 
-[node name="LocalGamePanel" type="VBoxContainer" parent="StartScreen/CenterContainer/VBox"]
+[node name="LocalGamePanel" type="VBoxContainer" parent="StartScreen/CenterContainer/VBox" unique_id=1407976271]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 24
@@ -85,64 +87,62 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "4명"
 
-[node name="LocalBackButton" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel"]
+[node name="LocalBackButton" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel" unique_id=2146157493]
 layout_mode = 2
 size_flags_horizontal = 4
 text = "뒤로"
 
-[node name="ManageCharactersButton" type="Button" parent="StartScreen/CenterContainer/VBox"]
+[node name="ManageCharactersButton" type="Button" parent="StartScreen/CenterContainer/VBox" unique_id=1430216174]
 custom_minimum_size = Vector2(160, 44)
 layout_mode = 2
 size_flags_horizontal = 4
 text = "캐릭터 관리"
 
-[node name="CharacterSelectScreen" type="Control" parent="." unique_id=2911040921]
+[node name="CharacterSelectScreen" type="Control" parent="." unique_id=-1383926375]
 visible = false
 anchors_preset = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("4_select")
 
-[node name="CenterContainer" type="CenterContainer" parent="CharacterSelectScreen"]
+[node name="CenterContainer" type="CenterContainer" parent="CharacterSelectScreen" unique_id=1878349729]
 layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="VBox" type="VBoxContainer" parent="CharacterSelectScreen/CenterContainer"]
+[node name="VBox" type="VBoxContainer" parent="CharacterSelectScreen/CenterContainer" unique_id=990952716]
 layout_mode = 2
 theme_override_constants/separation = 24
 alignment = 1
 
-[node name="TitleLabel" type="Label" parent="CharacterSelectScreen/CenterContainer/VBox"]
+[node name="TitleLabel" type="Label" parent="CharacterSelectScreen/CenterContainer/VBox" unique_id=2137180211]
 layout_mode = 2
 theme_override_font_sizes/font_size = 28
 text = "플레이어별로 캐릭터를 골라주세요"
 horizontal_alignment = 1
 
-[node name="SlotsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox"]
+[node name="SlotsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox" unique_id=1424866045]
 layout_mode = 2
 theme_override_constants/separation = 24
 alignment = 1
 
-[node name="ButtonsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox"]
+[node name="ButtonsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox" unique_id=2111241885]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="BackButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow"]
+[node name="BackButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow" unique_id=105356531]
 custom_minimum_size = Vector2(120, 48)
 layout_mode = 2
 text = "뒤로"
 
-[node name="ConfirmButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow"]
+[node name="ConfirmButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow" unique_id=876573878]
 custom_minimum_size = Vector2(120, 48)
 layout_mode = 2
 text = "시작"
 
-[node name="OnlineScreen" parent="." instance=ExtResource("5_online")]
+[node name="OnlineScreen" parent="." unique_id=787853847 instance=ExtResource("5_online")]
 visible = false
-anchor_right = 1.0
-anchor_bottom = 1.0
 
 [node name="GameScreen" type="Control" parent="." unique_id=891039919]
 visible = false
@@ -301,7 +301,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 mouse_filter = 1
 
-[node name="GreetingSkipButton" type="Button" parent="GameScreen/InputBlocker"]
+[node name="GreetingSkipButton" type="Button" parent="GameScreen/InputBlocker" unique_id=1891490437]
 visible = false
 custom_minimum_size = Vector2(140, 40)
 layout_mode = 1
@@ -312,6 +312,7 @@ offset_left = -70.0
 offset_top = 16.0
 offset_right = 70.0
 offset_bottom = 56.0
+grow_horizontal = 2
 theme_override_font_sizes/font_size = 15
 text = "인사 건너뛰기"
 
@@ -365,18 +366,16 @@ custom_minimum_size = Vector2(140, 44)
 layout_mode = 2
 text = "처음으로"
 
-[node name="DebugInitLog" type="RichTextLabel" parent="."]
+[node name="DebugInitLog" type="RichTextLabel" parent="." unique_id=1529651542]
+modulate = Color(1, 1, 1, 0.85)
 layout_mode = 1
 offset_left = 4.0
 offset_top = 4.0
 offset_right = 360.0
 offset_bottom = 150.0
 mouse_filter = 2
-modulate = Color(1, 1, 1, 0.85)
 theme_override_colors/default_color = Color(0.4, 1, 0.4, 1)
 theme_override_font_sizes/normal_font_size = 11
-bbcode_enabled = false
-scroll_active = true
 
 [node name="QuitConfirmDialog" type="ConfirmationDialog" parent="." unique_id=1962735809]
 title = "그만두기"

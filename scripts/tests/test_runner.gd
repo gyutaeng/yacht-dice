@@ -32,6 +32,7 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_game_state_snapshot.gd"),
 	preload("res://scripts/tests/suites/test_room_gameplay.gd"),
 	preload("res://scripts/tests/suites/test_online_game_controller.gd"),
+	preload("res://scripts/tests/suites/test_game_event_relay_classification.gd"),
 ]
 
 

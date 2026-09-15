@@ -14,6 +14,8 @@ func run(r) -> void:
 	_test_snapshot_clears_pending_and_updates_game_state(r)
 	_test_server_error_also_clears_pending(r)
 	_test_relays_events_into_local_game_events(r)
+	_test_relays_die_held_changed(r)
+	_test_relays_game_state_started_as_game_started(r)
 
 
 func _make_controller() -> OnlineGameController:
@@ -96,3 +98,32 @@ func _test_relays_events_into_local_game_events(r) -> void:
 
 	r.expect_eq("dice_rolled가 로컬 GameEvents로 재방출됨", dice_received.size(), 1)
 	r.expect_eq("turn_started가 로컬 GameEvents로 재방출됨", turn_received, [1])
+
+
+## 2-4C에서 추가 - die_held_changed가 이 목록에서 빠져서 온라인 홀드
+## 효과음이 안 나는 버그가 실제로 났었다(회귀 테스트).
+func _test_relays_die_held_changed(r) -> void:
+	var controller := _make_controller()
+	var received: Array = []
+	var on_held := func(p, i, held): received.append([p, i, held])
+	GameEvents.die_held_changed.connect(on_held)
+
+	controller._client.die_held_changed.emit(0, 2, true)
+
+	GameEvents.die_held_changed.disconnect(on_held)
+	r.expect_eq("die_held_changed가 로컬 GameEvents로 재방출됨", received, [[0, 2, true]])
+
+
+## game_state_started(네트워크 메시지 이름)는 로컬 GameEvents로 다시 emit할
+## 때 이름이 game_started로 바뀐다 - 로비 종료 game_started와 겹치지 않게
+## 일부러 다르게 지은 이름이라, relay 지점에서 정확히 되돌아가는지 확인한다.
+func _test_relays_game_state_started_as_game_started(r) -> void:
+	var controller := _make_controller()
+	var received: Array = []
+	var on_started := func(pc): received.append(pc)
+	GameEvents.game_started.connect(on_started)
+
+	controller._client.game_state_started.emit(3)
+
+	GameEvents.game_started.disconnect(on_started)
+	r.expect_eq("game_state_started가 로컬 GameEvents.game_started로 재방출됨", received, [3])

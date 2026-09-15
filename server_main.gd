@@ -37,13 +37,24 @@ var _active_room: Room = null
 var _pending_events: Array = []
 
 
+## 이 목록은 scripts/net/game_event_relay.gd의 RELAYED_EVENTS와 정확히
+## 일치해야 한다 - test_game_event_relay_classification.gd가 "그 목록에
+## 있는 시그널은 실제로 GameEvents에 존재한다"까지는 검증하지만, "여기서
+## 실제로 connect()했는가"는 사람이 이 함수를 RELAYED_EVENTS와 맞춰
+## 관리해야 한다(연결 코드 자체를 리플렉션으로 생성하면 사건마다 payload
+## 필드 이름이 달라서 오히려 더 복잡해짐 - 대신 목록 쪽은 테스트로 지킨다).
 func _ready() -> void:
 	GameEvents.dice_rolled.connect(_on_ge_dice_rolled)
+	GameEvents.die_held_changed.connect(_on_ge_die_held_changed)
 	GameEvents.special_hand_rolled.connect(_on_ge_special_hand_rolled)
-	GameEvents.bonus_achieved.connect(_on_ge_bonus_achieved)
+	GameEvents.score_committed.connect(_on_ge_score_committed)
+	GameEvents.yacht_scored.connect(_on_ge_yacht_scored)
 	GameEvents.zero_scored.connect(_on_ge_zero_scored)
+	GameEvents.bonus_achieved.connect(_on_ge_bonus_achieved)
+	GameEvents.turn_ended.connect(_on_ge_turn_ended)
 	GameEvents.turn_started.connect(_on_ge_turn_started)
 	GameEvents.game_ended.connect(_on_ge_game_ended)
+	GameEvents.game_started.connect(_on_ge_game_started)
 	_start_server()
 
 
@@ -439,10 +450,38 @@ func _on_ge_dice_rolled(player_index: int, values: Array, rerolls_left: int) -> 
 	_pending_events.append({"type": NetProtocol.MSG_DICE_ROLLED, "payload": {"player_index": player_index, "values": values, "rerolls_left": rerolls_left}})
 
 
+## 2-4C에서 추가 - 이게 빠져서 온라인 홀드 효과음이 안 났다.
+func _on_ge_die_held_changed(player_index: int, index: int, held: bool) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_DIE_HELD_CHANGED, "payload": {"player_index": player_index, "index": index, "held": held}})
+
+
 func _on_ge_special_hand_rolled(player_index: int, category: int, points: int) -> void:
 	if _active_room == null:
 		return
 	_pending_events.append({"type": NetProtocol.MSG_SPECIAL_HAND_ROLLED, "payload": {"player_index": player_index, "category": category, "points": points}})
+
+
+## 2-4C에서 추가 - 지금은 구독자가 없지만("구독자 없음"은 제외 사유가
+## 아님, game_event_relay.gd 참고) 나중에 확정 연출이 생기면 바로 쓸 수 있다.
+func _on_ge_score_committed(player_index: int, category: int, points: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_SCORE_COMMITTED, "payload": {"player_index": player_index, "category": category, "points": points}})
+
+
+## 2-4C에서 추가.
+func _on_ge_yacht_scored(player_index: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_YACHT_SCORED, "payload": {"player_index": player_index}})
+
+
+func _on_ge_zero_scored(player_index: int, category: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_ZERO_SCORED, "payload": {"player_index": player_index, "category": category}})
 
 
 func _on_ge_bonus_achieved(player_index: int) -> void:
@@ -451,10 +490,11 @@ func _on_ge_bonus_achieved(player_index: int) -> void:
 	_pending_events.append({"type": NetProtocol.MSG_BONUS_ACHIEVED, "payload": {"player_index": player_index}})
 
 
-func _on_ge_zero_scored(player_index: int, category: int) -> void:
+## 2-4C에서 추가.
+func _on_ge_turn_ended(player_index: int) -> void:
 	if _active_room == null:
 		return
-	_pending_events.append({"type": NetProtocol.MSG_ZERO_SCORED, "payload": {"player_index": player_index, "category": category}})
+	_pending_events.append({"type": NetProtocol.MSG_TURN_ENDED, "payload": {"player_index": player_index}})
 
 
 func _on_ge_turn_started(player_index: int) -> void:
@@ -467,6 +507,15 @@ func _on_ge_game_ended(winners: Array, scores: Array) -> void:
 	if _active_room == null:
 		return
 	_pending_events.append({"type": NetProtocol.MSG_GAME_ENDED, "payload": {"winners": winners, "scores": scores}})
+
+
+## 2-4C에서 추가 - GameState.start_turn()이 내는 신호다(로비가 다 찼을 때
+## 보내는 MSG_GAME_STARTED와는 다른 메시지 - 이름이 겹치면 인사 연출이
+## 두 번 트리거될 뻔했다. protocol.gd의 MSG_GAME_STATE_STARTED 주석 참고).
+func _on_ge_game_started(player_count: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_GAME_STATE_STARTED, "payload": {"player_count": player_count}})
 
 
 func _payload_int(payload: Dictionary, key: String) -> Variant:

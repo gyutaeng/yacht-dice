@@ -34,13 +34,26 @@ func _init(client: GameClient, player_count: int, my_index: int) -> void:
 	# 특수 족보 연출이 로컬이든 온라인이든 같은 시그널만 구독하면 되게
 	# 하기 위함이다. 순서는 서버가 스냅샷을 먼저, 이벤트를 나중에 보내고
 	# (server_main.gd) 패킷은 도착 순서대로 처리되므로, 여기서 별도로
-	# 순서를 맞출 필요가 없다.
+	# 순서를 맞출 필요가 없다. 어느 GameEvents 시그널이 여기 있어야
+	# 하는지는 scripts/net/game_event_relay.gd의 RELAYED_EVENTS가 기준이다
+	# (2-4C - "게임에서 일어난 사건은 전부 전달한다").
 	_client.dice_rolled.connect(func(p, v, r): GameEvents.dice_rolled.emit(p, v, r))
+	_client.die_held_changed.connect(func(p, i, held): GameEvents.die_held_changed.emit(p, i, held))
 	_client.special_hand_rolled.connect(func(p, c, pts): GameEvents.special_hand_rolled.emit(p, c, pts))
-	_client.bonus_achieved.connect(func(p): GameEvents.bonus_achieved.emit(p))
+	_client.score_committed.connect(func(p, c, pts): GameEvents.score_committed.emit(p, c, pts))
+	_client.yacht_scored.connect(func(p): GameEvents.yacht_scored.emit(p))
 	_client.zero_scored.connect(func(p, c): GameEvents.zero_scored.emit(p, c))
+	_client.bonus_achieved.connect(func(p): GameEvents.bonus_achieved.emit(p))
+	_client.turn_ended.connect(func(p): GameEvents.turn_ended.emit(p))
 	_client.turn_started.connect(func(p): GameEvents.turn_started.emit(p))
 	_client.game_ended.connect(func(w, s): GameEvents.game_ended.emit(w, s))
+	# game_state_started -> GameEvents.game_started로 이름이 바뀐다(로비
+	# 종료 game_started와 겹치지 않게 네트워크 메시지 이름만 다르게 뒀을
+	# 뿐, 로컬 GameEvents로 다시 emit할 때는 원래 이름을 그대로 쓴다).
+	# 지금은 이 신호를 구독하는 로컬 코드가 없다(인사 연출은 Main.gd의
+	# _enter_game()이 직접 호출) - "구독자가 없어서 생략"은 안 된다는
+	# 규칙이라 그래도 릴레이한다.
+	_client.game_state_started.connect(func(pc): GameEvents.game_started.emit(pc))
 
 
 func request_roll() -> void:

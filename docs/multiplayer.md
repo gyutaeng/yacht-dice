@@ -74,13 +74,23 @@
   스냅샷과 실제 진행 중 상태가 같아 보일 수 있어서, "방금 야추가
   났다"는 사실 자체를 스냅샷만으로는 구분 못 한다). 그래서 서버는
   `GameEvents`에 해당하는 사건이 벌어질 때마다 스냅샷과 별도로 이벤트
-  메시지(§2.2의 `dice_rolled`/`special_hand_rolled`/`bonus_achieved`/
-  `zero_scored`/`turn_started`/`game_ended`)를 방출한다. 클라이언트는 이
-  메시지를 받으면 **자기 로컬 `GameEvents`에 그대로 다시 emit**한다 —
-  그러면 `VoiceBank`/`SfxBank`/`Main.gd`의 기존 시그널 구독 코드가 출처가
-  로컬 GameState든 네트워크든 상관없이 그대로 동작한다. 이게 가능한 건
-  애초에 "게임 이벤트는 GameEvents로만 주고받는다"는 원칙 5를 지켜왔기
-  때문이다 — Phase 2에서 가장 크게 득을 보는 지점이다.
+  메시지(§2.2 참고)를 방출한다. 클라이언트는 이 메시지를 받으면 **자기
+  로컬 `GameEvents`에 그대로 다시 emit**한다 — 그러면 `VoiceBank`/
+  `SfxBank`/`Main.gd`의 기존 시그널 구독 코드가 출처가 로컬 GameState든
+  네트워크든 상관없이 그대로 동작한다. 이게 가능한 건 애초에 "게임
+  이벤트는 GameEvents로만 주고받는다"는 원칙 5를 지켜왔기 때문이다 —
+  Phase 2에서 가장 크게 득을 보는 지점이다.
+- **어떤 GameEvents 시그널을 릴레이하는가: 게임에서 일어난 사건은 전부
+  전달한다.** 예외는 `score_previewed` 하나이며, 이유는 빈도(한 번 굴릴
+  때마다 미확정 항목 수만큼 방출됨, 원칙 7)와 클라이언트가 자기
+  read-only `GameState`에서 `preview_score()`로 똑같이 다시 계산할 수
+  있다는 점이다. **"지금 구독하는 코드가 없다"는 제외 사유가 될 수
+  없다** — 오늘 참인 사실이지 규칙이 아니다. `die_held_changed`가 처음에
+  정확히 이 이유로 릴레이 목록에서 빠져서 온라인에서 주사위 홀드
+  효과음이 안 나는 버그가 실제로 났다(2-4C). 이 규칙은
+  `scripts/net/game_event_relay.gd`의 `RELAYED_EVENTS`/`EXCLUDED_EVENTS`
+  두 목록으로 코드에도 그대로 박혀 있고, `GameEvents`에 새 시그널이
+  추가됐는데 둘 중 어디에도 없으면 자동 테스트가 실패한다.
 
 ## 2. 메시지 목록
 
@@ -106,6 +116,16 @@
 클라이언트가 원래 안 보내던 것), 기존 메시지에 기본값이 있는 **선택적**
 필드 추가, 프로토콜 표면은 그대로고 서버 내부 구현만 바뀐 경우.
 
+이 규칙이 성립하려면 **모르는 메시지 타입을 받아도 크래시하지 않고
+조용히 무시해야 한다**는 전제가 필요하다 - 2-4C에서 실제로 확인함:
+클라이언트(`game_client.gd`의 `_handle_packet`)는 `match`에 해당하는
+분기가 없으면 아무 것도 안 하고 넘어가고, 서버(`server_main.gd`)는
+`_:` 기본 분기에서 `error(INVALID_ARGUMENT)`를 돌려줄 뿐 연결을 끊지
+않는다. 둘 다 안전하다는 게 코드로 확인됐으므로, 새 이벤트 메시지
+5개(`die_held_changed`/`score_committed`/`yacht_scored`/`turn_ended`/
+`game_state_started`)와 `set_player_count`/`room_player_count_changed`
+(2-3) 전부 버전을 안 올리고 추가했다.
+
 **메시지 크기 상한.** `MAX_MESSAGE_BYTES := 65536`(64KB)을 상수로 둔다.
 이보다 큰 메시지가 오면 서버는 내용을 읽지 않고 그 연결을 즉시 끊는다.
 지금 정의된 메시지는 전부 이 값의 몇 %도 안 되지만(§5), 2-5에서 캐릭터
@@ -129,6 +149,7 @@ JSON으로 봉투를 싸므로, 바이너리를 그 안에 넣으려면 Base64�
 | `join_room` | `code: String, reconnect_token: String (선택)` | 기존 방에 들어간다. `reconnect_token`을 같이 보내고 그 방의 어느 슬롯이 발급했던 토큰과 정확히 일치하면 그 슬롯으로 복귀한다(§6). 없거나 안 맞으면 새 참가자로 취급. |
 | `select_character` | `meta: Dictionary { id: String, display_name: String }` | 로비에서 캐릭터(정확히는 캐릭터 메타 - v1은 이 두 필드뿐, §8 참고)를 고른다. 아무 때나 다시 불러 바꿀 수 있다(게임 시작 전까지). |
 | `ready` | `ready: bool` | 준비 완료/취소 토글. |
+| `set_player_count` | `player_count: int (2~4)` | 방장이 로비에서 인원수를 바꾼다(§9 결정 1과 달리 2-3에서 추가 - 이미 들어온 인원보다 낮출 수 없고, 로비 단계에서만 허용). |
 | `request_roll` | (없음) | 주사위를 굴리고 싶다. |
 | `request_hold` | `index: int (0~4)` | 그 주사위의 고정 상태를 토글하고 싶다. |
 | `request_score` | `category: int (0~11)` | 그 칸에 확정하고 싶다. |
@@ -144,17 +165,23 @@ JSON으로 봉투를 싸므로, 바이너리를 그 안에 넣으려면 Base64�
 | `player_joined` | `player_index: int, meta: Dictionary` | 로비에 있는 동안 다른 사람이 들어왔을 때, 이미 있던 사람들에게. |
 | `player_character` | `player_index: int, meta: Dictionary` | 누군가 `select_character`로 캐릭터를 바꿨을 때 전원에게. v1은 `meta`에 `display_name`만 실질적으로 채워진다(§8). |
 | `player_ready_changed` | `player_index: int, ready: bool` | 준비 상태가 바뀔 때 전원에게. |
-| `game_started` | `player_count: int` | 방이 다 찼고 전원 준비되어 게임이 시작됨(§3의 로비 상태 기계에서 `transferring`을 거친 뒤). 이 직후 첫 `state_snapshot`이 따라온다. |
+| `room_player_count_changed` | `player_count: int` | 방장이 `set_player_count`로 인원수를 바꿨을 때 전원에게(2-3에서 추가). |
+| `game_started` | `player_count: int` | 방이 다 찼고 전원 준비되어 게임이 시작됨(§3의 로비 상태 기계에서 `transferring`을 거친 뒤). 이 직후 첫 `state_snapshot`이 따라온다. **`game_state_started`(아래)와 다른 메시지다** - 이건 로비 종료를 알리는 것뿐이고, 실제 `GameState.start_turn()`의 결과는 스냅샷과 `game_state_started`로 따로 온다. |
 | `state_snapshot` | §5 참고 | 지금 상태 전체. 서버 상태가 바뀔 때마다(요청 처리 결과) 방 전원에게. |
 | `dice_rolled` | `player_index:int, values:Array[int](5), rerolls_left:int` | 싱글플레이어의 `GameEvents.dice_rolled`와 동일 - SfxBank가 굴림 효과음에 쓴다. |
+| `die_held_changed` | `player_index:int, index:int, held:bool` | 주사위 고정/해제 - SfxBank가 홀드 효과음에 쓴다(2-4C에서 추가 - 처음엔 빠져 있어서 온라인에서 이 효과음만 안 났다). |
 | `special_hand_rolled` | `player_index:int, category:int, points:int` | 특수 족보 팝업/보이스 트리거. |
+| `score_committed` | `player_index:int, category:int, points:int` | 칸이 확정될 때마다(값과 무관하게). 지금은 구독하는 연출이 없지만, "구독자가 없다"는 릴레이 제외 사유가 아니므로 보낸다(2-4C, 위 규칙 참고). |
+| `yacht_scored` | `player_index:int` | 야추 칸을 50점으로 확정하는 순간(굴림 시점의 `special_hand_rolled`와는 다른, 확정 시점 신호). 2-4C에서 추가, 현재 구독자 없음. |
 | `bonus_achieved` | `player_index:int` | 상단 보너스(63점) 달성 보이스 트리거. |
 | `zero_scored` | `player_index:int, category:int` | 0점 확정(야추 포기 등) 보이스 트리거. |
+| `turn_ended` | `player_index:int` | 그 플레이어의 턴이 끝날 때(다음 턴 시작 여부와 무관하게 항상). 2-4C에서 추가, 현재 구독자 없음. |
 | `turn_started` | `player_index:int` | 새 턴 시작 - "내 차례" 인사 트리거. |
 | `game_ended` | `winners:Array[int], scores:Array[int]` | 게임 종료 - 승/패 보이스 시퀀스 트리거. |
+| `game_state_started` | `player_count:int` | `GameState.start_turn()`이 내는 `GameEvents.game_started`를 실어 나른다(2-4C에서 추가). 위 `game_started`(로비 종료 알림)와 이름이 같으면 클라이언트가 게임 시작을 두 번 받게 되어 일부러 다른 이름을 썼다 - 로컬로 재방출할 때는 원래 이름(`GameEvents.game_started`)으로 되돌아간다. 지금은 구독하는 연출이 없다(1-4C 인사 연출은 이 메시지가 아니라 로비 `game_started` 수신 시점에 클라이언트가 직접 트리거함). |
 | `player_left` | `player_index: int, reason: String` | `reason`은 `"left"`(자기가 나감)/`"disconnected"`(연결 끊김, 재접속 유예 중)/`"timeout"`(유예 종료, 확정 이탈 - §6). `"disconnected"`와 `"timeout"`은 같은 플레이어에 대해 순서대로 두 번 올 수 있다 - 클라이언트는 `"timeout"`을 받으면 "자동 진행 중" 표시를 계속 띄운다. |
 | `player_reconnected` | `player_index: int` | 재접속 유예 중이던 플레이어가 돌아왔을 때 전원에게(§6). |
-| `error` | `code: String, message: String` | 요청이 거부됨(§7 참고). `code`는 프로그램이 분기하는 값(`NOT_YOUR_TURN`/`PROTOCOL_MISMATCH` 등), `message`는 사람이 읽는 설명. |
+| `error` | `code: String, message: String` | 요청이 거부됨(§7 참고). `code`는 프로그램이 분기하는 값(`NOT_YOUR_TURN`/`PROTOCOL_MISMATCH`/`NOT_HOST`/`NOT_IN_GAME`/`ROOM_NOT_FOUND`/`ROOM_FULL`/`GAME_ALREADY_STARTED`/`INVALID_ARGUMENT` 등, 정의는 `scripts/net/protocol.gd`), `message`는 사람이 읽는 설명. |
 
 ## 3. 방 생성/입장 흐름
 

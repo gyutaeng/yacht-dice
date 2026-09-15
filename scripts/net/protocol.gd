@@ -48,6 +48,20 @@ const MSG_ZERO_SCORED := "zero_scored"
 const MSG_TURN_STARTED := "turn_started"
 const MSG_GAME_ENDED := "game_ended"
 
+# 2-4C(GameEvents 전수 조사 이후 추가) - "게임에서 일어난 사건은 전부
+# 전달한다"는 규칙(scripts/net/game_event_relay.gd 참고)에 따라 추가됨.
+# MSG_GAME_STATE_STARTED는 GameState.start_turn()이 내는
+# GameEvents.game_started(로컬 인사 연출용) 신호를 실어 나른다 - 로비가
+# 다 찼을 때 이미 보내는 MSG_GAME_STARTED(위, player_count만 담는 별개의
+# 메시지)와 이름이 겹치면 클라이언트가 같은 신호를 두 번(로비 종료 +
+# 이 이벤트) 받아서 인사 연출이 두 번 시작될 뻔했다 - 그래서 일부러
+# 다른 이름을 썼다.
+const MSG_DIE_HELD_CHANGED := "die_held_changed"
+const MSG_SCORE_COMMITTED := "score_committed"
+const MSG_YACHT_SCORED := "yacht_scored"
+const MSG_TURN_ENDED := "turn_ended"
+const MSG_GAME_STATE_STARTED := "game_state_started"
+
 # 문서(§2.0/§4/§7)에 이름이 있는 에러 코드.
 const ERROR_PROTOCOL_MISMATCH := "PROTOCOL_MISMATCH"
 const ERROR_ROOM_NOT_FOUND := "ROOM_NOT_FOUND"
