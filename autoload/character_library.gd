@@ -59,6 +59,10 @@ func get_builtin_fallback() -> CharacterProfile:
 	return _load_profile_from_dir(BUILTIN_FALLBACK_PATH, "default", true)
 
 
+## 저장 = manifest.json 갱신 + 그 manifest가 더 이상 가리키지 않는 파일 정리.
+## "제거" 버튼 등은 profile 필드만 지웠다가 여기서 한 번에 반영된다 - 별도의
+## "삭제 예정" 상태를 안 둬도, 저장에 실패하면(return false) 아무 파일도
+## 안 지워지므로 안전하다(정리는 manifest 쓰기가 성공한 뒤에만 실행됨).
 func save_profile(profile: CharacterProfile) -> bool:
 	if profile == null or not CharacterProfileScript.is_valid_id(profile.id):
 		push_error("CharacterLibrary.save_profile: 유효하지 않은 프로필(또는 id)입니다.")
@@ -77,7 +81,97 @@ func save_profile(profile: CharacterProfile) -> bool:
 
 	file.store_string(JSON.stringify(profile.to_dict(), "\t"))
 	file.close()
+
+	_cleanup_unreferenced_files(profile)
 	return true
+
+
+## 프로필 폴더 안 파일 중 portrait_file/thumbnail_file/voice_map 어디에도 안
+## 걸린 것을 지운다. 이미지를 여러 번 바꿔보고 저장 안 하고 나가도 고아
+## 파일이 안 쌓이게 하려고, 매 저장마다 실행한다(직접 지우는 게 아니라 "지금
+## manifest 기준으로 필요 없는 것"을 다시 계산해서 지우는 방식이라 상태를
+## 따로 들고 다닐 필요가 없다). dir_path는 항상 이 함수 안에서 profile.id로
+## 직접 만들기 때문에(호출부가 경로를 넘기지 않음) CHARACTERS_DIR 바깥을 건드릴 수 없다.
+func _cleanup_unreferenced_files(profile: CharacterProfile) -> void:
+	var dir_path := CHARACTERS_DIR.path_join(profile.id)
+
+	var referenced := {MANIFEST_FILENAME: true}
+	if profile.portrait_file != "":
+		referenced[profile.portrait_file] = true
+	if profile.thumbnail_file != "":
+		referenced[profile.thumbnail_file] = true
+	for key in profile.voice_map:
+		for filename in profile.voice_map[key]:
+			referenced[filename] = true
+
+	_delete_unreferenced_in_dir(dir_path, "", referenced)
+
+
+func _delete_unreferenced_in_dir(root_dir: String, relative_prefix: String, referenced: Dictionary) -> void:
+	var current_dir := root_dir if relative_prefix == "" else root_dir.path_join(relative_prefix)
+	var dir := DirAccess.open(current_dir)
+	if dir == null:
+		return
+
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		if entry != "." and entry != "..":
+			var relative_path := entry if relative_prefix == "" else relative_prefix.path_join(entry)
+			if dir.current_is_dir():
+				_delete_unreferenced_in_dir(root_dir, relative_path, referenced)
+				var sub_dir := DirAccess.open(root_dir.path_join(relative_path))
+				if sub_dir != null and sub_dir.get_files().is_empty() and sub_dir.get_directories().is_empty():
+					DirAccess.remove_absolute(root_dir.path_join(relative_path))
+			elif not referenced.has(relative_path):
+				DirAccess.remove_absolute(root_dir.path_join(relative_path))
+		entry = dir.get_next()
+	dir.list_dir_end()
+
+
+## FilePicker로 받은 바이트를 프로필 폴더 아래에 저장한다. subdir는 이미지는
+## ""(프로필 폴더 바로 아래), 보이스는 "voices"를 넘긴다. 이름이 겹치면
+## "portrait-2.png"처럼 뒤에 숫자를 붙인다. 반환값은 manifest에 그대로 적을 수
+## 있는 "프로필 폴더 기준 상대경로"(예: "voices/laugh-2.wav")이고, 실패하면 "".
+##
+## 디스크에는 바로 쓰지만 manifest.json에는 아직 안 적혀 있으므로, 저장하지
+## 않고 나가면 이 파일은 참조되지 않는 채로 남는다 - 그게 바로 save_profile()의
+## 정리 대상이라 별도 롤백 로직이 필요 없다.
+func save_asset_bytes(profile_id: String, subdir: String, desired_filename: String, bytes: PackedByteArray) -> String:
+	var dir_path := CHARACTERS_DIR.path_join(profile_id)
+	if subdir != "":
+		dir_path = dir_path.path_join(subdir)
+
+	if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
+		push_error("CharacterLibrary.save_asset_bytes: 폴더 생성 실패 - %s" % dir_path)
+		return ""
+
+	var final_name := _unique_filename(dir_path, desired_filename)
+	var file := FileAccess.open(dir_path.path_join(final_name), FileAccess.WRITE)
+	if file == null:
+		push_error("CharacterLibrary.save_asset_bytes: 파일을 쓸 수 없음 - %s" % dir_path.path_join(final_name))
+		return ""
+
+	file.store_buffer(bytes)
+	file.close()
+
+	return final_name if subdir == "" else subdir.path_join(final_name)
+
+
+## dir_path 안에서 desired_filename과 안 겹치는 이름을 찾는다("확장자 보존 +
+## -2, -3 ... 붙이기"). _generate_unique_id()와 목적은 같지만 그쪽은 폴더
+## 이름(확장자 없음, 슬러그화)용이라 그대로 못 쓴다.
+func _unique_filename(dir_path: String, desired_filename: String) -> String:
+	var base := desired_filename.get_basename()
+	var ext := desired_filename.get_extension()
+
+	var candidate := desired_filename
+	var suffix := 2
+	while FileAccess.file_exists(dir_path.path_join(candidate)):
+		candidate = "%s-%d.%s" % [base, suffix, ext] if ext != "" else "%s-%d" % [base, suffix]
+		suffix += 1
+
+	return candidate
 
 
 func create_new(display_name: String) -> CharacterProfile:

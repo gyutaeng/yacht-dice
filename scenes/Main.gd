@@ -3,7 +3,6 @@ extends Control
 const ROW_HEIGHT := 26.0
 const SMALL_TAG_SIZE := 56.0
 const PORTRAIT_FADE_DURATION := 0.3
-const PLACEHOLDER_PORTRAIT_PATH := "res://assets/placeholder_portrait.png"
 const BOLD_FONT_PATH := "res://assets/fonts/Pretendard-Bold.otf"
 
 # 효과음은 SfxBank가 special_hand_rolled를 직접 구독해서 재생한다(여기선 화면 연출만).
@@ -41,7 +40,6 @@ var _portrait_front_is_a: bool = true
 var _current_portrait_player: int = -1
 var _portrait_tween: Tween
 var _label_tween: Tween
-var _placeholder_texture: Texture2D
 var _special_hand_tween: Tween
 
 @onready var start_screen: Control = $StartScreen
@@ -49,6 +47,9 @@ var _special_hand_tween: Tween
 @onready var players_2_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players2Button
 @onready var players_3_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players3Button
 @onready var players_4_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players4Button
+@onready var manage_characters_button: Button = $StartScreen/CenterContainer/VBox/ManageCharactersButton
+
+@onready var character_select_screen = $CharacterSelectScreen
 
 @onready var turn_label: Label = $GameScreen/Margin/MainHBox/RightColumn/TurnLabel
 @onready var big_portrait_area: PanelContainer = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea
@@ -148,7 +149,6 @@ func _ready() -> void:
 
 	big_portrait_area.add_theme_stylebox_override("panel", column_normal_style)
 
-	_placeholder_texture = load(PLACEHOLDER_PORTRAIT_PATH)
 	portrait_texture_a.modulate.a = 1.0
 	portrait_texture_b.modulate.a = 0.0
 	# 처음 전환이 걸리는 시점엔 방금 보이게 된 GameScreen의 레이아웃이 아직
@@ -159,6 +159,10 @@ func _ready() -> void:
 	players_2_button.pressed.connect(_on_start_pressed.bind(2))
 	players_3_button.pressed.connect(_on_start_pressed.bind(3))
 	players_4_button.pressed.connect(_on_start_pressed.bind(4))
+	manage_characters_button.pressed.connect(_on_manage_characters_pressed)
+
+	character_select_screen.selection_confirmed.connect(_on_character_selection_confirmed)
+	character_select_screen.back_requested.connect(_on_character_select_back)
 
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
@@ -184,11 +188,36 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _on_start_pressed(player_count: int) -> void:
-	_start_new_game(player_count)
+	start_screen.visible = false
+	character_select_screen.visible = true
+	character_select_screen.configure(player_count)
+
+
+func _on_character_select_back() -> void:
+	character_select_screen.visible = false
+	start_screen.visible = true
+
+
+func _on_character_selection_confirmed(profiles: Array[CharacterProfile]) -> void:
+	character_select_screen.visible = false
+	_start_new_game(profiles)
+
+
+func _on_manage_characters_pressed() -> void:
+	var editor_scene: PackedScene = load("res://scenes/character_editor/character_editor.tscn")
+	var editor_instance: Control = editor_scene.instantiate()
+	# 동적으로 인스턴스화한 씬이라 정적 타입을 모른다 - 문자열 기반 connect로
+	# 컴파일 타임 멤버 검사를 피한다(캐릭터 편집 화면은 Main.gd가 몰라도 되는
+	# 독립된 화면이라 class_name으로 엮을 필요가 없다).
+	editor_instance.connect("closed", func() -> void:
+		remove_child(editor_instance)
+		editor_instance.queue_free()
+	)
+	add_child(editor_instance)
 
 
 func _on_restart_pressed() -> void:
-	_start_new_game(game_state.player_count)
+	_start_new_game(player_character_assignments.duplicate())
 
 
 func _on_to_title_pressed() -> void:
@@ -227,7 +256,7 @@ func _reset_portrait_transition_state() -> void:
 	input_blocker.visible = false
 
 
-func _start_new_game(player_count: int) -> void:
+func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 	_clear_dynamic_nodes()
 
 	start_screen.visible = false
@@ -237,10 +266,11 @@ func _start_new_game(player_count: int) -> void:
 	selected_category = -1
 	_reset_portrait_transition_state()
 
+	var player_count := profiles.size()
 	game_state = GameState.new(player_count)
 	debug_hotkeys.game_state = game_state
 
-	_assign_player_characters(player_count)  # TODO(1-6): 캐릭터 선택 UI가 생기면 이 임시 배정을 제거한다.
+	player_character_assignments = profiles
 	VoiceBank.configure(player_character_assignments)
 	_build_character_area()
 	_build_scoreboard()
@@ -294,87 +324,6 @@ func _on_confirm_score_pressed() -> void:
 	game_state.confirm_category(category)
 
 
-# TODO(1-6): 캐릭터 선택 UI가 생기면 이 함수는 통째로 지우고, 플레이어가 직접
-# 고른 프로필을 쓰도록 바꾼다. 지금은 아직 선택 UI가 없어서, 고를 수 있는
-# 프로필(내장 기본 + 사용자 캐릭터)을 순서대로 돌려가며 임시로 배정한다.
-func _assign_player_characters(player_count: int) -> void:
-	var selectable := CharacterLibrary.get_selectable_profiles()
-	player_character_assignments.clear()
-	if selectable.is_empty():
-		return
-	for p in player_count:
-		player_character_assignments.append(selectable[p % selectable.size()])
-
-
-func _load_character_file_texture(profile: CharacterProfile, filename: String) -> Texture2D:
-	if profile == null or filename.is_empty():
-		return null
-	var base_dir := CharacterLibrary.BUILTIN_FALLBACK_PATH if profile.is_builtin else CharacterLibrary.CHARACTERS_DIR.path_join(profile.id)
-	return AssetLoader.load_texture_from_path(base_dir.path_join(filename))
-
-
-func _load_portrait_texture(profile: CharacterProfile) -> Texture2D:
-	if profile == null:
-		return null
-	return _load_character_file_texture(profile, profile.portrait_file)
-
-
-# 초상화가 없거나(portrait_file 비어 있음) 로딩에 실패하면 실루엣 플레이스홀더로
-# 대체한다. 어떤 경우에도 빈 화면이 나오면 안 된다.
-func _resolve_display_texture(profile: CharacterProfile) -> Texture2D:
-	var texture := _load_portrait_texture(profile)
-	return texture if texture != null else _placeholder_texture
-
-
-# 작은 초상(이름표 썸네일)에 쓸 텍스처를 고른다. thumbnail_file이 있고 로딩에
-# 성공하면 그것을, 아니면 큰 초상/실루엣 폴백(_resolve_display_texture)을 쓴다.
-func _resolve_thumbnail_texture(profile: CharacterProfile) -> Texture2D:
-	if profile != null:
-		var dedicated := _load_character_file_texture(profile, profile.thumbnail_file)
-		if dedicated != null:
-			return dedicated
-	return _resolve_display_texture(profile)
-
-
-# 작은 초상에 전용 thumbnail_file 이미지를 쓰는 경우에만 true(가운데 기준 크롭).
-# portrait_file로 폴백한 경우나 실루엣인 경우는 false(위쪽 기준 크롭 — 전신
-# 일러스트를 정사각형에 채울 때 얼굴이 있을 위쪽을 기준으로 잘라낸다).
-func _thumbnail_should_center_crop(profile: CharacterProfile) -> bool:
-	if profile == null:
-		return false
-	return _load_character_file_texture(profile, profile.thumbnail_file) != null
-
-
-# container_size 안에 texture를 비율 유지한 채 배치한다.
-# cover=false: 컨테이너 안에 다 들어오게 축소(contain). cover=true: 컨테이너를
-# 꽉 채우고 넘치는 쪽은 잘라낸다(cover).
-# vertical_anchor: 세로 정렬 기준. 0.0=위쪽(얼굴 쪽), 0.5=가운데, 1.0=아래쪽(발이 바닥에).
-# 가로 방향은 항상 가운데 정렬한다.
-func _fit_texture(rect: TextureRect, texture: Texture2D, container_size: Vector2, cover: bool, vertical_anchor: float) -> void:
-	rect.texture = texture
-	rect.stretch_mode = TextureRect.STRETCH_SCALE
-
-	if texture == null or container_size.x <= 0 or container_size.y <= 0:
-		return
-
-	var tex_size := texture.get_size()
-	if tex_size.x <= 0 or tex_size.y <= 0:
-		return
-
-	var scale: float
-	if cover:
-		scale = max(container_size.x / tex_size.x, container_size.y / tex_size.y)
-	else:
-		scale = min(container_size.x / tex_size.x, container_size.y / tex_size.y)
-
-	var display_size := tex_size * scale
-	rect.size = display_size
-	rect.position = Vector2(
-		(container_size.x - display_size.x) / 2.0,
-		(container_size.y - display_size.y) * vertical_anchor
-	)
-
-
 func _on_portrait_stack_resized() -> void:
 	_refit_portrait_rect(portrait_texture_a)
 	_refit_portrait_rect(portrait_texture_b)
@@ -383,7 +332,7 @@ func _on_portrait_stack_resized() -> void:
 func _refit_portrait_rect(rect: TextureRect) -> void:
 	if rect.texture == null:
 		return
-	_fit_texture(rect, rect.texture, portrait_stack.size, false, 1.0)
+	TextureFit.fit(rect, rect.texture, portrait_stack.size, false, 1.0)
 
 
 func _transition_portrait(profile: CharacterProfile, label_text: String) -> void:
@@ -396,7 +345,7 @@ func _transition_portrait(profile: CharacterProfile, label_text: String) -> void
 	var back_rect := portrait_texture_b if _portrait_front_is_a else portrait_texture_a
 	_portrait_front_is_a = not _portrait_front_is_a
 
-	_fit_texture(back_rect, _resolve_display_texture(profile), portrait_stack.size, false, 1.0)
+	TextureFit.fit(back_rect, CharacterPortrait.resolve_display_texture(profile), portrait_stack.size, false, 1.0)
 	back_rect.modulate.a = 0.0
 
 	_portrait_tween = create_tween()
@@ -460,8 +409,8 @@ func _build_character_area() -> void:
 		thumb_clip.add_child(thumb)
 		# 전용 thumbnail_file이 있으면 가운데 기준으로, portrait_file/실루엣 폴백이면
 		# 세로로 긴 일러스트일 수 있으니 얼굴이 있을 위쪽 기준으로 잘라낸다.
-		var thumb_anchor := 0.5 if _thumbnail_should_center_crop(profile) else 0.0
-		_fit_texture(thumb, _resolve_thumbnail_texture(profile), Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE), true, thumb_anchor)
+		var thumb_anchor := 0.5 if CharacterPortrait.thumbnail_should_center_crop(profile) else 0.0
+		TextureFit.fit(thumb, CharacterPortrait.resolve_thumbnail_texture(profile), Vector2(SMALL_TAG_SIZE, SMALL_TAG_SIZE), true, thumb_anchor)
 
 		var name_label := Label.new()
 		name_label.text = "P%d %s" % [p + 1, shown_name]

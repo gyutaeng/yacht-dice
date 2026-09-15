@@ -47,55 +47,71 @@ const Yacht := {
 # 검증한다), 순서는 UI에 표시될 순서다. 실제로 보이스를 붙일 수 있는 이벤트만
 # 여기 올린다 — yacht.roll/hold처럼 너무 자주 울리는 건 GameEvents 시그널은
 # 남아 있어도 이 테이블에서는 뺐다(효과음/연출 전용으로만 쓰임).
+#
+# "frequency"는 캐릭터 편집 UI가 "한 판에 한 번만 나오는 이벤트"와 "자주
+# 나오는 이벤트"를 시각적으로 구분하는 데 쓴다("once" | "frequent").
+# once = 한 플레이어 기준 한 판에 최대 1번만 성립 가능(구조적으로 반복 불가).
+# 야추 포기(ZERO)도 야추 칸이 하나뿐이라 once다 — 반복 가능한 건 주사위를
+# "다시" 굴려서 또 나올 수 있는 특수 족보/차례뿐이라 frequent.
 const VOICE_EVENTS := [
 	{
 		"key": Common.GAME_START,
 		"label": "게임 시작 인사",
 		"description": "게임이 시작되고 첫 턴이 시작되기 전, 한 판에 한 번만 재생됩니다.",
+		"frequency": "once",
 	},
 	{
 		"key": Common.TURN_START,
 		"label": "내 차례",
 		"description": "자기 차례가 되었을 때 재생됩니다.",
+		"frequency": "frequent",
 	},
 	{
 		"key": Common.WIN,
 		"label": "승리",
 		"description": "게임에서 1등으로 이겼을 때 재생됩니다.",
+		"frequency": "once",
 	},
 	{
 		"key": Common.LOSE,
 		"label": "패배",
 		"description": "게임에서 최하위 점수로 졌을 때 재생됩니다.",
+		"frequency": "once",
 	},
 	{
 		"key": Yacht.YACHT,
 		"label": "야추",
 		"description": "주사위를 굴려 야추(같은 눈 5개)가 나왔을 때 재생됩니다.",
+		"frequency": "frequent",
 	},
 	{
 		"key": Yacht.LARGE_STRAIGHT,
 		"label": "라지 스트레이트",
 		"description": "주사위를 굴려 라지 스트레이트가 나왔을 때 재생됩니다.",
+		"frequency": "frequent",
 	},
 	{
 		"key": Yacht.FULL_HOUSE,
 		"label": "풀 하우스",
 		"description": "주사위를 굴려 풀 하우스가 나왔을 때 재생됩니다.",
+		"frequency": "frequent",
 	},
 	{
 		"key": Yacht.FOUR_OF_A_KIND,
 		"label": "포 카드",
 		"description": "주사위를 굴려 포 카드(같은 눈 4개 이상)가 나왔을 때 재생됩니다.",
+		"frequency": "frequent",
 	},
 	{
 		"key": Yacht.BONUS,
 		"label": "상단 보너스",
 		"description": "상단 섹션 합계 63점을 넘겨 보너스를 처음 달성했을 때 재생됩니다.",
+		"frequency": "once",
 	},
 	{
 		"key": Yacht.ZERO,
 		"label": "야추 포기",
 		"description": "야추 칸을 0점으로 포기할 때 재생됩니다. 다른 칸을 0점으로 확정할 때는 재생되지 않습니다.",
+		"frequency": "once",
 	},
 ]

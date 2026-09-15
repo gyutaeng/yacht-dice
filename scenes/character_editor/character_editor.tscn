@@ -1,0 +1,247 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scenes/character_editor/character_editor.gd" id="1_editor"]
+[ext_resource type="Script" path="res://scenes/character_editor/character_list_panel.gd" id="2_list"]
+[ext_resource type="Script" path="res://scenes/character_editor/image_editor_panel.gd" id="3_image"]
+[ext_resource type="Script" path="res://scenes/character_editor/voice_mapping_panel.gd" id="4_voice"]
+
+[node name="CharacterEditor" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_editor")
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="Root" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="TopBar" type="HBoxContainer" parent="Margin/Root"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TitleLabel" type="Label" parent="Margin/Root/TopBar"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "캐릭터 관리"
+
+[node name="Spacer" type="Control" parent="Margin/Root/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SaveButton" type="Button" parent="Margin/Root/TopBar"]
+custom_minimum_size = Vector2(120, 44)
+layout_mode = 2
+disabled = true
+text = "저장"
+
+[node name="CloseButton" type="Button" parent="Margin/Root/TopBar"]
+custom_minimum_size = Vector2(100, 44)
+layout_mode = 2
+text = "닫기"
+
+[node name="HBox" type="HBoxContainer" parent="Margin/Root"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="LeftPanel" type="VBoxContainer" parent="Margin/Root/HBox"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+theme_override_constants/separation = 8
+script = ExtResource("2_list")
+
+[node name="TitleLabel" type="Label" parent="Margin/Root/HBox/LeftPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "캐릭터 목록"
+
+[node name="Scroll" type="ScrollContainer" parent="Margin/Root/HBox/LeftPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ListContainer" type="VBoxContainer" parent="Margin/Root/HBox/LeftPanel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="ActionsRow" type="HBoxContainer" parent="Margin/Root/HBox/LeftPanel"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="NewButton" type="Button" parent="Margin/Root/HBox/LeftPanel/ActionsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "새로 만들기"
+
+[node name="DuplicateButton" type="Button" parent="Margin/Root/HBox/LeftPanel/ActionsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+disabled = true
+text = "복제"
+
+[node name="DeleteButton" type="Button" parent="Margin/Root/HBox/LeftPanel/ActionsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+disabled = true
+text = "삭제"
+
+[node name="DeleteConfirmDialog" type="ConfirmationDialog" parent="Margin/Root/HBox/LeftPanel"]
+title = "캐릭터 삭제"
+initial_position = 1
+ok_button_text = "삭제"
+dialog_text = "정말 삭제하시겠습니까? 되돌릴 수 없습니다."
+cancel_button_text = "취소"
+
+[node name="CenterPanel" type="VBoxContainer" parent="Margin/Root/HBox"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+theme_override_constants/separation = 10
+script = ExtResource("3_image")
+
+[node name="NameRow" type="HBoxContainer" parent="Margin/Root/HBox/CenterPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NameLabel" type="Label" parent="Margin/Root/HBox/CenterPanel/NameRow"]
+layout_mode = 2
+text = "이름"
+
+[node name="NameEdit" type="LineEdit" parent="Margin/Root/HBox/CenterPanel/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "캐릭터 이름"
+
+[node name="PortraitSection" type="VBoxContainer" parent="Margin/Root/HBox/CenterPanel"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="PortraitLabel" type="Label" parent="Margin/Root/HBox/CenterPanel/PortraitSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "스탠딩 이미지(전신) - 세로로 긴 비율 권장, 다른 비율도 잘려 보이지 않음"
+autowrap_mode = 2
+
+[node name="PortraitBox" type="Control" parent="Margin/Root/HBox/CenterPanel/PortraitSection"]
+custom_minimum_size = Vector2(220, 300)
+layout_mode = 2
+clip_contents = true
+
+[node name="PortraitPreview" type="TextureRect" parent="Margin/Root/HBox/CenterPanel/PortraitSection/PortraitBox"]
+layout_mode = 0
+expand_mode = 1
+
+[node name="PortraitButtonsRow" type="HBoxContainer" parent="Margin/Root/HBox/CenterPanel/PortraitSection"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="LoadButton" type="Button" parent="Margin/Root/HBox/CenterPanel/PortraitSection/PortraitButtonsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "스탠딩 이미지 불러오기"
+
+[node name="RemoveButton" type="Button" parent="Margin/Root/HBox/CenterPanel/PortraitSection/PortraitButtonsRow"]
+layout_mode = 2
+disabled = true
+text = "제거"
+
+[node name="ThumbnailSection" type="VBoxContainer" parent="Margin/Root/HBox/CenterPanel"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="ThumbnailLabel" type="Label" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "작은 초상(썸네일) - 정사각형이 아니면 가운데 기준으로 잘라 보여줌"
+autowrap_mode = 2
+
+[node name="ThumbnailBox" type="Control" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection"]
+custom_minimum_size = Vector2(96, 96)
+layout_mode = 2
+clip_contents = true
+
+[node name="ThumbnailPreview" type="TextureRect" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection/ThumbnailBox"]
+layout_mode = 0
+expand_mode = 1
+
+[node name="ThumbnailButtonsRow" type="HBoxContainer" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="LoadButton" type="Button" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection/ThumbnailButtonsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "썸네일 불러오기"
+
+[node name="RemoveButton" type="Button" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection/ThumbnailButtonsRow"]
+layout_mode = 2
+disabled = true
+text = "제거"
+
+[node name="FallbackHint" type="Label" parent="Margin/Root/HBox/CenterPanel/ThumbnailSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+modulate = Color(1, 1, 1, 0.7)
+text = "썸네일을 안 올리면 스탠딩 이미지의 위쪽을 잘라 자동으로 씁니다."
+autowrap_mode = 2
+
+[node name="VolumeRow" type="HBoxContainer" parent="Margin/Root/HBox/CenterPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="VolumeLabel" type="Label" parent="Margin/Root/HBox/CenterPanel/VolumeRow"]
+layout_mode = 2
+text = "보이스 볼륨"
+
+[node name="VolumeSlider" type="HSlider" parent="Margin/Root/HBox/CenterPanel/VolumeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VolumeValueLabel" type="Label" parent="Margin/Root/HBox/CenterPanel/VolumeRow"]
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+text = "0.0 dB"
+
+[node name="RightPanel" type="VBoxContainer" parent="Margin/Root/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+script = ExtResource("4_voice")
+
+[node name="TitleLabel" type="Label" parent="Margin/Root/HBox/RightPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "보이스 매핑"
+
+[node name="Scroll" type="ScrollContainer" parent="Margin/Root/HBox/RightPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="RowsContainer" type="VBoxContainer" parent="Margin/Root/HBox/RightPanel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="UnsavedChangesDialog" type="ConfirmationDialog" parent="."]
+title = "저장하지 않은 변경사항"
+initial_position = 1
+ok_button_text = "계속(변경사항 버리기)"
+dialog_text = "저장하지 않은 변경사항이 있습니다. 계속하면 사라집니다."
+cancel_button_text = "취소"
+
+[node name="StorageWarningDialog" type="AcceptDialog" parent="."]
+title = "저장 실패"
+initial_position = 1
+dialog_text = "브라우저가 저장을 막고 있어요. 캐릭터 팩으로 내보내서 보관하세요."

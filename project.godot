@@ -24,16 +24,16 @@ AssetLoader="*res://autoload/asset_loader.gd"
 VoiceBank="*res://autoload/voice_bank.gd"
 SfxBank="*res://autoload/sfx_bank.gd"
 
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/build_stamp/plugin.cfg")
-
 [display]
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/build_stamp/plugin.cfg")
 
 [gui]
 

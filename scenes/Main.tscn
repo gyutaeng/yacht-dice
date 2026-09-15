@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bahupo0io1w3n" path="res://scenes/Main.gd" id="1_script"]
 [ext_resource type="Script" uid="uid://yygi4w0ce8kc" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
-[ext_resource type="Script" uid="uid://crpiw5pshw1xu" path="res://scripts/dev/character_seed.gd" id="3_script"]
+[ext_resource type="Script" path="res://scenes/character_select_panel.gd" id="4_select"]
 
 [node name="Main" type="Control" unique_id=344423488]
 layout_mode = 3
@@ -60,6 +60,55 @@ custom_minimum_size = Vector2(120, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "4명"
+
+[node name="ManageCharactersButton" type="Button" parent="StartScreen/CenterContainer/VBox"]
+custom_minimum_size = Vector2(160, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "캐릭터 관리"
+
+[node name="CharacterSelectScreen" type="Control" parent="." unique_id=2911040921]
+visible = false
+anchors_preset = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("4_select")
+
+[node name="CenterContainer" type="CenterContainer" parent="CharacterSelectScreen"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="VBox" type="VBoxContainer" parent="CharacterSelectScreen/CenterContainer"]
+layout_mode = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="TitleLabel" type="Label" parent="CharacterSelectScreen/CenterContainer/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "플레이어별로 캐릭터를 골라주세요"
+horizontal_alignment = 1
+
+[node name="SlotsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="ButtonsRow" type="HBoxContainer" parent="CharacterSelectScreen/CenterContainer/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="BackButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow"]
+custom_minimum_size = Vector2(120, 48)
+layout_mode = 2
+text = "뒤로"
+
+[node name="ConfirmButton" type="Button" parent="CharacterSelectScreen/CenterContainer/VBox/ButtonsRow"]
+custom_minimum_size = Vector2(120, 48)
+layout_mode = 2
+text = "시작"
 
 [node name="GameScreen" type="Control" parent="." unique_id=891039919]
 visible = false
@@ -277,6 +326,3 @@ cancel_button_text = "취소"
 
 [node name="DebugHotkeys" type="Node" parent="." unique_id=1371383245]
 script = ExtResource("2_script")
-
-[node name="CharacterSeed" type="Node" parent="." unique_id=1360839358]
-script = ExtResource("3_script")
