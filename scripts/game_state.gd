@@ -52,6 +52,17 @@ var current_player: int = 0
 var game_over: bool = false
 var player_count: int = DEFAULT_PLAYER_COUNT
 
+# 온라인 클라이언트가 화면을 그리기 위해 들고 있는 사본은 절대 스스로
+# 진행하면 안 된다(docs/multiplayer.md §1 - "클라이언트는 GameState를
+# 계산기로 쓰지 않는다"). read_only=true면 roll()/toggle_lock()/
+# confirm_category()/start_turn()/auto_confirm_least_damaging()이 전부
+# 아무 것도 안 하고 push_error로 시끄럽게 실패한다 - 이 프로젝트에서 지금
+# 까지 난 사고(초기 야추 50점, queue_free, 특수 족보 연출)가 전부 "에러
+# 없이 조용히 틀리는" 종류였어서, 어긋남은 반드시 소리 나게 실패해야
+# 한다는 원칙을 여기 적용한다. 유일하게 통과하는 갱신 경로는
+# apply_snapshot() - 서버가 보낸 스냅샷을 그대로 반영하는 용도다.
+var read_only: bool = false
+
 # dice_results의 기본값은 그 자체로 유효한(전부 같은) 조합이라, 한 번도 굴리기
 # 전에는 이 플래그로 "아직 진짜 주사위 값이 아니다"를 구분한다. 이게 없으면
 # Yacht 같은 족보가 시작하자마자 잡히는 문제가 재현된다.
@@ -77,7 +88,8 @@ var _rng: RandomNumberGenerator
 var _score_calculators: Array[Callable] = []
 
 
-func _init(requested_player_count: int = DEFAULT_PLAYER_COUNT, rng: RandomNumberGenerator = null) -> void:
+func _init(requested_player_count: int = DEFAULT_PLAYER_COUNT, rng: RandomNumberGenerator = null, read_only_state: bool = false) -> void:
+	read_only = read_only_state
 	if requested_player_count < MIN_PLAYER_COUNT or requested_player_count > MAX_PLAYER_COUNT:
 		push_warning("GameState: 인원수 %d는 %d~%d 범위를 벗어나 거부됨. 기본값 %d로 시작." % [requested_player_count, MIN_PLAYER_COUNT, MAX_PLAYER_COUNT, DEFAULT_PLAYER_COUNT])
 		player_count = DEFAULT_PLAYER_COUNT
@@ -111,6 +123,9 @@ func _init(requested_player_count: int = DEFAULT_PLAYER_COUNT, rng: RandomNumber
 
 
 func start_turn() -> void:
+	if read_only:
+		push_error("GameState.start_turn(): read_only 인스턴스에서 호출됨 - 무시됨")
+		return
 	if not _game_started_emitted:
 		_game_started_emitted = true
 		GameEvents.game_started.emit(player_count)
@@ -119,6 +134,9 @@ func start_turn() -> void:
 
 
 func roll() -> void:
+	if read_only:
+		push_error("GameState.roll(): read_only 인스턴스에서 호출됨 - 무시됨")
+		return
 	if rolls_left <= 0:
 		return
 
@@ -129,12 +147,18 @@ func roll() -> void:
 
 
 func toggle_lock(index: int) -> void:
+	if read_only:
+		push_error("GameState.toggle_lock(): read_only 인스턴스에서 호출됨 - 무시됨")
+		return
 	dice_locked[index] = not dice_locked[index]
 	GameEvents.die_held_changed.emit(current_player, index, dice_locked[index])
 	state_changed.emit()
 
 
 func confirm_category(category_index: int) -> void:
+	if read_only:
+		push_error("GameState.confirm_category(): read_only 인스턴스에서 호출됨 - 무시됨")
+		return
 	if not has_rolled or game_over or player_score_confirmed[current_player][category_index]:
 		return
 
@@ -190,6 +214,9 @@ func confirm_category(category_index: int) -> void:
 ## player_index가 지금 차례가 아니거나 게임이 이미 끝났으면 아무 것도 안
 ## 하고 -1을 돌려준다(호출부의 실수를 방어).
 func auto_confirm_least_damaging(player_index: int) -> int:
+	if read_only:
+		push_error("GameState.auto_confirm_least_damaging(): read_only 인스턴스에서 호출됨 - 무시됨")
+		return -1
 	if player_index != current_player or game_over:
 		push_warning("GameState.auto_confirm_least_damaging: 플레이어 %d는 지금 차례가 아니거나 게임이 이미 끝남" % player_index)
 		return -1
@@ -231,6 +258,70 @@ func preview_score(category_index: int) -> int:
 
 func calculate_score(category_index: int, dice: Array[int]) -> int:
 	return _score_calculators[category_index].call(dice)
+
+
+## 서버가 방 전원에게 방송하는 전체 스냅샷(docs/multiplayer.md §5)의
+## 내용이다 - 순수 읽기라 read_only 여부와 무관하게 항상 호출 가능하다.
+func get_state_snapshot() -> Dictionary:
+	return {
+		"dice_results": dice_results,
+		"dice_locked": dice_locked,
+		"rolls_left": rolls_left,
+		"has_rolled": has_rolled,
+		"current_player": current_player,
+		"game_over": game_over,
+		"player_count": player_count,
+		"player_score_confirmed": player_score_confirmed,
+		"player_confirmed_scores": player_confirmed_scores,
+		"player_bonus_achieved": player_bonus_achieved,
+	}
+
+
+## get_state_snapshot()이 만든 것과 같은 모양의 Dictionary를 받아 필드를
+## 통째로 덮어쓴다 - read_only 인스턴스가 상태를 갱신하는 유일한 경로다
+## (read_only가 아니어도 막지는 않지만, 실제로 쓰는 곳은 온라인 클라이언트
+## 사본뿐이다). JSON을 거쳐 온 값은 정수도 float가 되므로(2-3에서 이미
+## 겪은 문제) 원소 하나하나를 명시적으로 int()/bool()에 통과시킨다 - 안
+## 그러면 점수판에 "5.0"처럼 찍히는 조용한 버그가 생긴다.
+func apply_snapshot(snapshot: Dictionary) -> void:
+	var new_dice: Array[int] = []
+	for v in snapshot.get("dice_results", []):
+		new_dice.append(int(v))
+	dice_results = new_dice
+
+	var new_locked: Array[bool] = []
+	for v in snapshot.get("dice_locked", []):
+		new_locked.append(bool(v))
+	dice_locked = new_locked
+
+	rolls_left = int(snapshot.get("rolls_left", rolls_left))
+	has_rolled = bool(snapshot.get("has_rolled", has_rolled))
+	current_player = int(snapshot.get("current_player", current_player))
+	game_over = bool(snapshot.get("game_over", game_over))
+	player_count = int(snapshot.get("player_count", player_count))
+
+	var new_score_confirmed: Array = []
+	for player_flags in snapshot.get("player_score_confirmed", []):
+		var row: Array[bool] = []
+		for v in player_flags:
+			row.append(bool(v))
+		new_score_confirmed.append(row)
+	player_score_confirmed = new_score_confirmed
+
+	var new_confirmed_scores: Array = []
+	for player_scores in snapshot.get("player_confirmed_scores", []):
+		var row: Array[int] = []
+		for v in player_scores:
+			row.append(int(v))
+		new_confirmed_scores.append(row)
+	player_confirmed_scores = new_confirmed_scores
+
+	var new_bonus: Array[bool] = []
+	for v in snapshot.get("player_bonus_achieved", []):
+		new_bonus.append(bool(v))
+	player_bonus_achieved = new_bonus
+
+	state_changed.emit()
 
 
 func get_player_total(player: int) -> int:

@@ -27,8 +27,27 @@ var room_manager := RoomManager.new()
 var _pending_since: Dictionary = {}  # peer_id -> Time.get_ticks_msec()
 var _hello_confirmed: Dictionary = {}  # peer_id -> true
 
+# GameEvents 릴레이(2-4) - 서버 프로세스 전체에 GameEvents 인스턴스가
+# 하나뿐이라 방마다 새로 구독하지 않는다. 지금 처리 중인 요청이 어느
+# 방 것인지는 _active_room으로 표시하고, 그 방을 처리하는 동안 emit된
+# 사건만 _pending_events에 쌓았다가 스냅샷을 보낸 "다음에" 방송한다
+# (docs/multiplayer.md §1 - 스냅샷을 먼저 적용한 뒤에 이벤트를 방출해야
+# 보이스 핸들러가 낡은 상태를 안 읽는다).
+var _active_room: Room = null
+var _pending_events: Array = []
+
 
 func _ready() -> void:
+	GameEvents.dice_rolled.connect(_on_ge_dice_rolled)
+	GameEvents.special_hand_rolled.connect(_on_ge_special_hand_rolled)
+	GameEvents.bonus_achieved.connect(_on_ge_bonus_achieved)
+	GameEvents.zero_scored.connect(_on_ge_zero_scored)
+	GameEvents.turn_started.connect(_on_ge_turn_started)
+	GameEvents.game_ended.connect(_on_ge_game_ended)
+	_start_server()
+
+
+func _start_server() -> void:
 	var port := _resolve_port()
 	var err := peer.create_server(port)
 	if err != OK:
@@ -122,6 +141,12 @@ func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
 			_handle_set_player_count(sender_id, payload)
 		NetProtocol.MSG_LEAVE:
 			_handle_leave(sender_id, payload)
+		NetProtocol.MSG_REQUEST_ROLL:
+			_handle_request_roll(sender_id, payload)
+		NetProtocol.MSG_REQUEST_HOLD:
+			_handle_request_hold(sender_id, payload)
+		NetProtocol.MSG_REQUEST_SCORE:
+			_handle_request_score(sender_id, payload)
 		NetProtocol.MSG_HELLO:
 			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
@@ -310,8 +335,9 @@ func _remove_peer_and_notify(peer_id: int, reason: String) -> void:
 
 ## 정원이 다 차고 전원이 준비되면 자동 시작한다(§3). v1은 transferring에서
 ## 실제로 전송할 캐릭터 자산이 없으므로(§8) 상태 기계를 거치되 즉시
-## 통과한다. state_snapshot 등 실제 게임 진행 동기화는 2-4에서 구현한다 -
-## 지금은 game_started만 보낸다(이번 작업 범위가 "연결과 방 관리까지").
+## 통과한다. game_started 다음에 game_state.start_turn()을 실제로 호출해서
+## 첫 턴을 연다 - 이게 없으면 turn_started(0)도 안 나가고 첫 스냅샷도
+## "아무것도 시작 안 한" 상태로 나간다.
 func _maybe_start_game(room: Room) -> void:
 	if room.state != Room.State.LOBBY or not room.all_ready():
 		return
@@ -320,6 +346,127 @@ func _maybe_start_game(room: Room) -> void:
 	room.state = Room.State.IN_GAME
 	print("[서버] 방 %s 게임 시작 (인원 %d)" % [room.code, room.capacity])
 	_broadcast_room(room, NetProtocol.MSG_GAME_STARTED, {"player_count": room.capacity})
+
+	_mutate_and_broadcast(room, func(): room.game_state.start_turn())
+
+
+func _handle_request_roll(sender_id: int, _payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null:
+		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
+		return
+
+	var err := room.validate_roll(sender_id)
+	if err != "":
+		_send_error(sender_id, err, _turn_error_message(err, "리롤 횟수를 모두 사용했습니다."))
+		return
+
+	_mutate_and_broadcast(room, func(): room.game_state.roll())
+
+
+func _handle_request_hold(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null:
+		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
+		return
+
+	var index = _payload_int(payload, "index")
+	if index == null:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "주사위 번호가 올바르지 않습니다.")
+		return
+
+	var err := room.validate_hold(sender_id, index)
+	if err != "":
+		_send_error(sender_id, err, _turn_error_message(err, "주사위 번호가 올바르지 않거나 아직 굴리지 않았습니다."))
+		return
+
+	_mutate_and_broadcast(room, func(): room.game_state.toggle_lock(index))
+
+
+func _handle_request_score(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null:
+		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
+		return
+
+	var category = _payload_int(payload, "category")
+	if category == null:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "족보 값이 올바르지 않습니다.")
+		return
+
+	var err := room.validate_score(sender_id, category)
+	if err != "":
+		_send_error(sender_id, err, _turn_error_message(err, "그 칸은 지금 확정할 수 없습니다(이미 확정됐거나 아직 안 굴렸습니다)."))
+		return
+
+	_mutate_and_broadcast(room, func(): room.game_state.confirm_category(category))
+	if room.game_state.game_over:
+		room.state = Room.State.ENDED
+
+
+func _turn_error_message(code: String, invalid_argument_message: String) -> String:
+	match code:
+		NetProtocol.ERROR_NOT_IN_GAME:
+			return "게임이 진행 중이 아닙니다."
+		NetProtocol.ERROR_NOT_YOUR_TURN:
+			return "당신의 턴이 아닙니다."
+		NetProtocol.ERROR_INVALID_ARGUMENT:
+			return invalid_argument_message
+		_:
+			return "요청을 처리할 수 없습니다."
+
+
+## mutate가 room.game_state를 실제로 진행시키는 동안 emit되는 GameEvents
+## 6종(_on_ge_*)을 _pending_events에 모았다가, 스냅샷을 먼저 보낸 "다음에"
+## 순서대로 방송한다(docs/multiplayer.md §1 - 스냅샷 먼저, 이벤트는 그
+## 다음). WebSocket은 TCP 기반이라 순서가 보장되므로 클라이언트는 받은
+## 순서 그대로 처리하기만 하면 된다.
+func _mutate_and_broadcast(room: Room, mutate: Callable) -> void:
+	_active_room = room
+	_pending_events = []
+	mutate.call()
+	_active_room = null
+
+	_broadcast_room(room, NetProtocol.MSG_STATE_SNAPSHOT, room.game_state.get_state_snapshot())
+	for event in _pending_events:
+		_broadcast_room(room, event["type"], event["payload"])
+	_pending_events.clear()
+
+
+func _on_ge_dice_rolled(player_index: int, values: Array, rerolls_left: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_DICE_ROLLED, "payload": {"player_index": player_index, "values": values, "rerolls_left": rerolls_left}})
+
+
+func _on_ge_special_hand_rolled(player_index: int, category: int, points: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_SPECIAL_HAND_ROLLED, "payload": {"player_index": player_index, "category": category, "points": points}})
+
+
+func _on_ge_bonus_achieved(player_index: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_BONUS_ACHIEVED, "payload": {"player_index": player_index}})
+
+
+func _on_ge_zero_scored(player_index: int, category: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_ZERO_SCORED, "payload": {"player_index": player_index, "category": category}})
+
+
+func _on_ge_turn_started(player_index: int) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_TURN_STARTED, "payload": {"player_index": player_index}})
+
+
+func _on_ge_game_ended(winners: Array, scores: Array) -> void:
+	if _active_room == null:
+		return
+	_pending_events.append({"type": NetProtocol.MSG_GAME_ENDED, "payload": {"winners": winners, "scores": scores}})
 
 
 func _payload_int(payload: Dictionary, key: String) -> Variant:

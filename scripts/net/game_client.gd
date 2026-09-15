@@ -5,9 +5,6 @@ extends Node
 # 화면)는 이 노드의 시그널만 구독한다 - GameEvents 패턴과 같은 이유로,
 # 방출자(이 클래스)는 구독자를 몰라야 한다.
 #
-# 게임 진행 메시지(request_roll 등)는 2-4에서 추가한다 - 이번 단계는
-# 연결/방 관리 메시지까지만 다룬다.
-
 signal connection_failed(reason: String)
 signal hello_acknowledged()
 signal room_created(code: String, player_count: int, reconnect_token: String)
@@ -20,6 +17,19 @@ signal player_left(player_index: int, reason: String)
 signal game_started(player_count: int)
 signal server_error(code: String, message: String)
 signal disconnected()
+
+# 2-4: 실제 게임 진행(docs/multiplayer.md §2.2). state_snapshot은 매번
+# 전체 상태를 담고 있어서(§5) OnlineGameController가 read_only GameState에
+# 그대로 apply_snapshot()한다. 나머지 6개는 "사건"이라 스냅샷 비교로는
+# 재현할 수 없고(§1) 서버가 스냅샷 뒤에 별도로 보낸다 - 클라이언트는 받은
+# 순서 그대로(스냅샷 먼저) 처리하기만 하면 된다.
+signal state_snapshot_received(snapshot: Dictionary)
+signal dice_rolled(player_index: int, values: Array[int], rerolls_left: int)
+signal special_hand_rolled(player_index: int, category: int, points: int)
+signal bonus_achieved(player_index: int)
+signal zero_scored(player_index: int, category: int)
+signal turn_started(player_index: int)
+signal game_ended(winners: Array[int], scores: Array[int])
 
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
@@ -95,6 +105,18 @@ func leave() -> void:
 	_send(NetProtocol.MSG_LEAVE, {})
 
 
+func request_roll() -> void:
+	_send(NetProtocol.MSG_REQUEST_ROLL, {})
+
+
+func request_hold(index: int) -> void:
+	_send(NetProtocol.MSG_REQUEST_HOLD, {"index": index})
+
+
+func request_score(category: int) -> void:
+	_send(NetProtocol.MSG_REQUEST_SCORE, {"category": category})
+
+
 func close() -> void:
 	_reset()
 
@@ -111,6 +133,16 @@ func _send(type: String, payload: Dictionary) -> void:
 	if _state == State.IDLE or _state == State.CONNECTING:
 		return
 	_peer.put_packet(NetProtocol.encode(type, payload))
+
+
+## GameEvents의 dice_rolled/game_ended는 Array[int]로 타입이 고정돼 있어서
+## (autoload/game_events.gd) JSON을 거쳐 float가 된 배열을 그대로 못
+## 넘긴다 - 원소 단위로 int()에 통과시켜 진짜 Array[int]를 만든다.
+func _to_int_array(raw: Array) -> Array[int]:
+	var result: Array[int] = []
+	for v in raw:
+		result.append(int(v))
+	return result
 
 
 func _handle_packet(bytes: PackedByteArray) -> void:
@@ -141,6 +173,20 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 			player_left.emit(int(payload.get("player_index", -1)), str(payload.get("reason", "")))
 		NetProtocol.MSG_GAME_STARTED:
 			game_started.emit(int(payload.get("player_count", 0)))
+		NetProtocol.MSG_STATE_SNAPSHOT:
+			state_snapshot_received.emit(payload)
+		NetProtocol.MSG_DICE_ROLLED:
+			dice_rolled.emit(int(payload.get("player_index", -1)), _to_int_array(payload.get("values", [])), int(payload.get("rerolls_left", 0)))
+		NetProtocol.MSG_SPECIAL_HAND_ROLLED:
+			special_hand_rolled.emit(int(payload.get("player_index", -1)), int(payload.get("category", -1)), int(payload.get("points", 0)))
+		NetProtocol.MSG_BONUS_ACHIEVED:
+			bonus_achieved.emit(int(payload.get("player_index", -1)))
+		NetProtocol.MSG_ZERO_SCORED:
+			zero_scored.emit(int(payload.get("player_index", -1)), int(payload.get("category", -1)))
+		NetProtocol.MSG_TURN_STARTED:
+			turn_started.emit(int(payload.get("player_index", -1)))
+		NetProtocol.MSG_GAME_ENDED:
+			game_ended.emit(_to_int_array(payload.get("winners", [])), _to_int_array(payload.get("scores", [])))
 		NetProtocol.MSG_ERROR:
 			var code := str(payload.get("code", ""))
 			if code == NetProtocol.ERROR_PROTOCOL_MISMATCH:

@@ -25,6 +25,9 @@ const MSG_SELECT_CHARACTER := "select_character"
 const MSG_READY := "ready"
 const MSG_SET_PLAYER_COUNT := "set_player_count"
 const MSG_LEAVE := "leave"
+const MSG_REQUEST_ROLL := "request_roll"
+const MSG_REQUEST_HOLD := "request_hold"
+const MSG_REQUEST_SCORE := "request_score"
 
 # 서버 -> 클라이언트
 const MSG_HELLO_ACK := "hello_ack"
@@ -37,6 +40,13 @@ const MSG_ROOM_PLAYER_COUNT_CHANGED := "room_player_count_changed"
 const MSG_PLAYER_LEFT := "player_left"
 const MSG_GAME_STARTED := "game_started"
 const MSG_ERROR := "error"
+const MSG_STATE_SNAPSHOT := "state_snapshot"
+const MSG_DICE_ROLLED := "dice_rolled"
+const MSG_SPECIAL_HAND_ROLLED := "special_hand_rolled"
+const MSG_BONUS_ACHIEVED := "bonus_achieved"
+const MSG_ZERO_SCORED := "zero_scored"
+const MSG_TURN_STARTED := "turn_started"
+const MSG_GAME_ENDED := "game_ended"
 
 # 문서(§2.0/§4/§7)에 이름이 있는 에러 코드.
 const ERROR_PROTOCOL_MISMATCH := "PROTOCOL_MISMATCH"
@@ -48,6 +58,14 @@ const ERROR_INVALID_ARGUMENT := "INVALID_ARGUMENT"
 # 항목(§4)은 이미 이 상황들을 요구하고 있지만 코드 이름까지 정해두진 않았다.
 const ERROR_NOT_HOST := "NOT_HOST"
 const ERROR_GAME_ALREADY_STARTED := "GAME_ALREADY_STARTED"
+
+# 2-4에서 추가 - 문서 §7은 NOT_YOUR_TURN을 이름만 언급하고 정의는 안
+# 해뒀다. NOT_IN_GAME은 문서에 이름조차 없어서 이번에 직접 정했다(방이
+# 아직 로비/전송 단계인데 request_roll 등이 온 경우) - 리롤 소진/이미
+# 확정된 칸/범위 밖 인덱스 등 나머지 세부 사유는 코드를 더 늘리지 않고
+# INVALID_ARGUMENT를 재사용하고 message로 구분한다.
+const ERROR_NOT_YOUR_TURN := "NOT_YOUR_TURN"
+const ERROR_NOT_IN_GAME := "NOT_IN_GAME"
 
 
 ## 메시지 하나를 JSON 봉투로 인코딩한다. 실패할 일이 없는 입력(Dictionary)만

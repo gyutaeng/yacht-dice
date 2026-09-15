@@ -53,6 +53,8 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - 2-1: 멀티플레이 설계 문서(`docs/multiplayer.md`) + GameState headless 검증(`server_main.gd`) — **완료.**
 - 2-3: WebSocket 연결 + 방 관리(게임 동기화 제외) — **완료.** 실제 소켓으로
   수동 검증(아래 요약)까지 마침, 사용자의 에디터 다중 인스턴스 확인은 아직.
+- 2-4: 실제 게임 동기화(서버 권위 + "리모컨" UI) — **완료.** 실제 소켓으로
+  한 판 끝까지(굴리기/고정/확정/턴 전환/게임 종료) 수동 검증함.
 
 ### 1-5(파일 선택) 완료 요약
 - 데스크톱: `FilePickerDesktop`(Godot `FileDialog` + 백그라운드 스레드 읽기)으로 검증 완료.
@@ -184,8 +186,72 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 "제어문자+30자 닉네임 → 12자로 정리됨"/"빈 닉네임 → 플레이어 N"까지
 수동 확인함. 전체 526개 테스트 통과.
 
+### 2-4(실제 게임 동기화) 완료 요약
+`docs/multiplayer.md` §1/§2/§4/§5를 실제로 구현했다 - 서버가 주사위를
+굴리고, 클라이언트는 화면을 그리기만 한다.
+
+- **"리모컨" 구조(사용자가 확정)**: 게임 화면(`scenes/Main.gd`)은 버튼이
+  눌리면 `active_controller.request_roll()/request_hold()/request_score()`만
+  부른다. `if 온라인` 분기가 화면 코드 안에 전혀 없다 - 로컬/온라인
+  어느 쪽을 붙일지는 게임 진입 지점(`_enter_game()`) 한 곳에서만 정해진다.
+  단, **읽기(화면 렌더링)는 지금처럼 `game_state` 필드를 직접 읽는다** -
+  사용자가 "쓰기만 금지"로 범위를 명확히 확정해줘서, 기존 `_refresh_*_ui()`
+  코드는 거의 안 바뀌었다.
+- **`GameState`에 `read_only` 추가**: `roll()`/`toggle_lock()`/
+  `confirm_category()`/`start_turn()`/`auto_confirm_least_damaging()`은
+  read_only 인스턴스에서 부르면 `push_error`로 시끄럽게 실패하고 아무
+  것도 안 바꾼다 - "에러 없이 조용히 틀리는" 사고(초기 야추 50점,
+  queue_free, 특수 족보 연출)를 다시 겪지 않기 위한 설계. 유일한 갱신
+  경로는 `apply_snapshot()`(서버 스냅샷을 그대로 반영, JSON 왕복으로
+  정수가 float가 되는 문제를 원소별 `int()`/`bool()`로 방어).
+- **컨트롤러 2개**(`scripts/game/`): `LocalGameController`(진짜
+  `GameState.roll()` 등을 직접 부름), `OnlineGameController`(read_only
+  `GameState` 사본을 들고 있고, `GameClient.request_*()`를 보낸 뒤
+  응답이 올 때까지 `is_request_pending()`으로 연타를 막는다). 둘 다
+  추상 클래스 없이 같은 이름의 메서드만 맞춘 덕타이핑 계약.
+- **서버**: `Room`에 `validate_roll/hold/score()`(순수 로직, 헤드리스
+  테스트 가능)를 추가하고 `server_main.gd`는 이 결과만 보고 배선한다.
+  GameEvents 릴레이는 서버 프로세스 전체에 하나뿐인 `GameEvents`
+  인스턴스를 "지금 처리 중인 방"(`_active_room`) 표시로 공유해서, 방마다
+  새로 구독하지 않는다. **스냅샷을 먼저 보내고 이벤트를 그 다음에
+  보낸다**(사용자가 지적한 순서 요구사항) - 안 그러면 보이스 핸들러가
+  낡은 상태를 읽는다.
+- **문서에 이름 없어 새로 정한 에러 코드 2개**: `NOT_YOUR_TURN`(문서
+  §7에 이름만 언급됨), `NOT_IN_GAME`(문서에 이름조차 없음). 리롤 소진/
+  이미 확정된 칸/범위 밖 인덱스는 전부 `INVALID_ARGUMENT` 재사용.
+- **온라인 v1은 캐릭터 보이스가 안 난다(버그 아님, 2-3이 정한 범위)**:
+  온라인 로비는 닉네임만 받으므로, 게임 화면엔 `display_name`만 채운
+  빈 `CharacterProfile`을 넘긴다 - "매핑 없는 캐릭터" 경로(기존 로컬
+  코드가 이미 처리하던 경로)를 그대로 타서 특수 족보 텍스트 팝업과
+  효과음(SfxBank)은 온라인에서도 완전히 정상 동작하지만, 캐릭터
+  보이스만 voice_map이 비어 있어 소리가 안 난다. 2-5에서 실제 캐릭터
+  데이터가 오가면 그 즉시 채워진다.
+- **디버그 단축키/버튼을 온라인에서 숨김**: `debug_hotkeys.gd`에
+  `set_panel_visible()`을 추가하고 `_show_screen()` 한 곳에서
+  온라인 로비/온라인 게임 양쪽 다 가린다. `debug_hotkeys.game_state`는
+  온라인 사본에 절대 안 물린다(`_enter_game()`에서 `my_index == -1`일
+  때만 연결).
+- **Phase 1 연출 코드는 실제로 0줄 바뀜**: `autoload/voice_bank.gd`,
+  `autoload/sfx_bank.gd` 전체와 `Main.gd`의 `_transition_portrait`/
+  `_play_special_hand_effect`/`_start_greeting_sequence`/
+  `_on_greeting_step_started`/`_on_greeting_sequence_finished`/
+  `_build_character_area`/`_build_scoreboard` 함수 본문을 diff로
+  확인함 - 전부 변경 없음. 서버가 보낸 이벤트를 클라이언트가 로컬
+  `GameEvents`로 재방출하기만 하면 됐다는 뜻.
+- **온라인 재대전은 이번 범위 밖**: 게임 종료 후 [다시 하기] 버튼은
+  로컬에서만 보이고 온라인은 [타이틀로]만 제공한다.
+- 새 테스트 30개(`test_game_state_snapshot.gd`/`test_room_gameplay.gd`/
+  `test_online_game_controller.gd`) - 전체 582개 통과. 실제 소켓
+  동작(요청→스냅샷→화면 갱신, 남의 턴 요청 거부, 인원수 변경, 게임 종료
+  까지)은 서버를 실제로 띄우고 스크립트 클라이언트 2개로 한 판 끝까지
+  수동 검증했다 - 이 과정에서 실제 버그 하나 더 발견: 방의 두 참가자가
+  거의 동시에 나갈 때(2-3에서 이미 고친 `_send()` 가드) 외에 새로 발견된
+  건 없음, 2-3의 수정이 여전히 유효함을 재확인.
+- **에디터 GUI 다중 인스턴스로 화면까지 보는 확인은 아직 사용자 몫**
+  (텍스트 팝업/초상화 전환/점수판 갱신이 실제로 눈에 보이는지).
+
 ### 현재 전체 테스트 개수
-526개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+582개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 `DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은
@@ -507,5 +573,7 @@ export할 때 항상 출력 경로를 명시적으로 넘겨서(`--export-releas
 - 1-8: `docs/web_verification_checklist.md`대로 웹 전체 점검(사용자가 직접
   브라우저에서 진행 중) - 캐릭터 편집 화면, 캐릭터 팩, 업로드 제한, 시크릿
   모드, 오디오 자동재생 정책, 메모리, 창 크기 변경까지.
-- Phase 2: 온라인 멀티플레이 (2-1·2-3 완료 - 2-3에서 연결·방 관리까지
-  붙었고, 게임 진행 동기화(2-4: request_roll/state_snapshot 등)는 아직)
+- Phase 2: 온라인 멀티플레이 (2-1·2-3·2-4 완료 - 실제 주사위 진행까지
+  서버 권위로 동작함). 다음은 2-5(캐릭터 팩 실시간 전송 - 지금은 온라인
+  로비가 닉네임만 다뤄서 보이스/초상화가 안 나옴) 또는 2-6(연결 끊김
+  처리 - 재접속 토큰 실제 매칭, AFK 자동 진행, 턴 제한 시간).

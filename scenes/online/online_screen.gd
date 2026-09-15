@@ -1,11 +1,17 @@
 extends Control
 
-# 온라인 게임 화면(2-3, docs/multiplayer.md). character_select_panel.gd처럼
+# 온라인 게임 화면(2-3/2-4, docs/multiplayer.md). character_select_panel.gd처럼
 # Main.tscn에 자식으로 들어가는 자체 완결형 화면 - GameClient를 직접 들고
-# 있고, 밖으로는 back_requested 시그널 하나만 낸다. 게임 동기화(주사위/점수)는
-# 이번 범위 밖이라 game_started를 받으면 로그만 남긴다.
+# 있고, 밖으로는 back_requested/game_play_started 두 시그널만 낸다.
 
 signal back_requested()
+
+## 서버의 game_started(로비 종료)를 받으면 emit한다 - Main.gd가 이걸 받아
+## OnlineGameController를 만들고 Screen.GAME(로컬과 같은 게임 화면)으로
+## 전환한다. GameClient는 그대로 넘겨준다 - 이 노드(online_screen)는
+## Screen.GAME으로 바뀌면 visible=false가 될 뿐 트리에서 안 사라지므로
+## _client(자식 노드)의 _process()는 계속 돌아 패킷을 받는다.
+signal game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile])
 
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8910"
 const DEFAULT_NICKNAME := "플레이어"
@@ -229,9 +235,22 @@ func _on_player_left(player_index: int, _reason: String) -> void:
 	_refresh_lobby_ui()
 
 
+## v1 온라인은 실제 캐릭터(초상/보이스)가 없다(2-3에서 정함, 문서 §8) -
+## 로비에서 모은 닉네임만 채운 빈 CharacterProfile을 만든다. voice_map이
+## 비어 있으므로 VoiceBank/특수 족보 연출은 "매핑 없는 캐릭터" 경로를
+## 그대로 타서(기존 로컬 코드 그대로) 텍스트 팝업·효과음은 정상 동작하고
+## 캐릭터 보이스만 조용하다 - 2-5에서 실제 데이터가 오가면 채워진다.
 func _on_game_started(player_count: int) -> void:
-	print("[온라인] 게임 시작! (%d인) - 실제 진행 동기화는 다음 단계에서 구현됩니다." % player_count)
-	_lobby_status_label.text = "게임 시작! (이후 진행은 다음 단계에서 구현됩니다)"
+	print("[온라인] 게임 시작! (%d인)" % player_count)
+
+	var profiles: Array[CharacterProfile] = []
+	for i in player_count:
+		var profile := CharacterProfile.new()
+		var display_name: String = _players.get(i, {}).get("meta", {}).get("display_name", "")
+		profile.display_name = display_name if not display_name.is_empty() else "플레이어 %d" % (i + 1)
+		profiles.append(profile)
+
+	game_play_started.emit(_client, _my_index, profiles)
 
 
 func _on_server_error(_code: String, message: String) -> void:

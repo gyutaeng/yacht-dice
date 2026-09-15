@@ -60,6 +60,7 @@ var is_auto_playing: bool = false
 var greeting_active: bool = false
 
 var _cache_stats_label: Label
+var _panel_layer: CanvasLayer  # DEBUG_MODE가 꺼져 있으면 null(패널 자체를 안 만듦)
 
 const KEY_ACTIONS := {
 	KEY_1: "force_yacht",
@@ -104,6 +105,14 @@ func _ready() -> void:
 	if not BuildInfo.DEBUG_MODE:
 		return
 	_build_debug_button_panel()
+
+
+## 온라인 로비/온라인 게임 화면에서는 디버그 버튼이 보이면 안 된다(2-4에서
+## 사용자가 지적 - "야추 강제" 버튼이 온라인 로비에 떠 있으면 안 됨).
+## DEBUG_MODE가 꺼져 있으면 애초에 패널 자체가 없으므로 아무 것도 안 한다.
+func set_panel_visible(v: bool) -> void:
+	if _panel_layer != null:
+		_panel_layer.visible = v
 
 
 func _input(event: InputEvent) -> void:
@@ -166,6 +175,7 @@ func _build_debug_button_panel() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 100  # InputBlocker 등 게임 UI보다 확실히 위.
 	add_child(layer)
+	_panel_layer = layer
 
 	# 우하단 모서리에 고정하되, 이 시점엔 버튼을 아직 안 넣어서 크기를 모른다.
 	# anchor_*=1(우하단 모서리)에 offset_left/right를 같은 값으로 둬서 앵커

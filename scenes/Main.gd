@@ -18,6 +18,18 @@ const SPECIAL_HAND_FADE_DURATION := 0.15
 
 var game_state: GameState
 
+# "리모컨" 패턴(2-4) - 화면은 로컬을 조종하는지 서버에 요청을 보내는지
+# 모른다. 버튼이 눌리면 이 컨트롤러의 request_*()만 부른다. 어느
+# 컨트롤러를 붙일지는 _enter_game()과 그걸 부르는 두 진입점
+# (_start_new_game/_on_online_game_play_started) 한 곳에서만 정해진다 -
+# 화면 코드 안에는 if 온라인 분기가 없다. LocalGameController/
+# OnlineGameController(scripts/game/)는 같은 이름의 메서드만 맞춘
+# 덕타이핑 계약이라 정적 타입을 안 붙인다.
+var active_controller
+# 온라인일 때만 "내 슬롯 번호"(0-based) - 로컬은 -1(턴 제한 없음).
+# GameState/GameClient가 아니라 이 값만 화면이 직접 들고 읽는다.
+var my_player_index: int = -1
+
 var locked_style := StyleBoxFlat.new()
 var column_normal_style := StyleBoxFlat.new()
 var column_highlight_style := StyleBoxFlat.new()
@@ -194,6 +206,7 @@ func _ready() -> void:
 	character_select_screen.back_requested.connect(_on_character_select_back)
 
 	online_screen.back_requested.connect(_on_online_back_requested)
+	online_screen.game_play_started.connect(_on_online_game_play_started)
 
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
@@ -304,6 +317,12 @@ func _show_screen(screen: Screen) -> void:
 	game_screen.visible = (screen == Screen.GAME)
 	online_screen.visible = (screen == Screen.ONLINE)
 
+	# 온라인 로비(ONLINE)와 온라인 게임(GAME + my_player_index != -1) 양쪽
+	# 다 디버그 단축키 버튼을 숨긴다 - 온라인 화면에 "야추 강제" 버튼이
+	# 떠 있으면 안 된다(2-4에서 사용자가 지적). 분기는 이 한 곳뿐이다.
+	var is_online_screen := screen == Screen.ONLINE or (screen == Screen.GAME and my_player_index != -1)
+	debug_hotkeys.set_panel_visible(not is_online_screen)
+
 
 func _on_start_pressed(player_count: int) -> void:
 	_show_screen(Screen.CHARACTER_SELECT)
@@ -375,6 +394,11 @@ func _on_to_title_pressed() -> void:
 
 
 func _return_to_title() -> void:
+	if active_controller != null:
+		active_controller.leave_game()
+	active_controller = null
+	my_player_index = -1
+
 	_clear_dynamic_nodes()
 	_reset_portrait_transition_state()
 	game_state = null
@@ -412,20 +436,42 @@ func _reset_portrait_transition_state() -> void:
 
 
 func _start_new_game(profiles: Array[CharacterProfile]) -> void:
+	var controller := LocalGameController.new()
+	controller.start(profiles.size())
+	_enter_game(controller, profiles)
+
+
+## online_screen이 서버의 game_started를 받아 로비를 끝내면 이걸 부른다
+## (online_screen.gd의 game_play_started 시그널). profiles는 닉네임만 채운
+## 빈 CharacterProfile 배열이다(2-3이 정한 v1 온라인 범위, 문서 §8).
+func _on_online_game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile]) -> void:
+	var controller := OnlineGameController.new(client, profiles.size(), my_index)
+	_enter_game(controller, profiles, my_index)
+
+
+## 로컬/온라인 공용 게임 진입 로직("리모컨"이 어느 컨트롤러에 꽂히는지
+## 정하는 유일한 지점). 이 아래는 2-3 이전부터 있던 화면 배선 그대로다 -
+## Phase 1 연출 코드(VoiceBank/SfxBank/_build_character_area/_build_scoreboard/
+## 인사 연출)는 한 줄도 안 바뀐다.
+func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = -1) -> void:
 	_clear_debug_log()
 	_debug_init_log("게임 시작 초기화 시작 (인원 %d명)" % profiles.size())
 	_debug_log_special_hand_subscribers()
 	_clear_dynamic_nodes()
 
 	game_over_overlay.visible = false
+	active_controller = controller
+	my_player_index = my_index
 	_show_screen(Screen.GAME)
 	roll_button.disabled = false
 	selected_category = -1
 	_reset_portrait_transition_state()
 
-	var player_count := profiles.size()
-	game_state = GameState.new(player_count)
-	debug_hotkeys.game_state = game_state
+	game_state = controller.game_state
+	# 온라인 사본은 절대 debug_hotkeys에 물리지 않는다 - read_only 가드
+	# 덕에 물려도 조용히 틀리진 않지만, 애초에 서버를 거치지 않고 화면
+	# 상태를 건드릴 길을 만들지 않는다(2-4에서 사용자가 명시).
+	debug_hotkeys.game_state = (game_state if my_index == -1 else null)
 	_debug_init_log("캐릭터 배정 완료")
 
 	player_character_assignments = profiles
@@ -441,7 +487,11 @@ func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 	game_state.state_changed.connect(_on_state_changed)
 	_debug_init_log("시그널 연결 완료")
 
-	game_state.start_turn()
+	# 로컬은 여기서 첫 턴을 직접 연다. 온라인은 서버가 이미 game_started
+	# 직후 game_state.start_turn()을 불러 첫 스냅샷을 보내는 중이므로
+	# 여기서 또 부르면 안 된다(read_only라 애초에 막히기도 한다).
+	if my_index == -1:
+		game_state.start_turn()
 	_debug_init_log("첫 턴 시작 완료 - 초기화 끝")
 
 	_start_greeting_sequence()
@@ -467,16 +517,23 @@ func _clear_dynamic_nodes() -> void:
 	player_character_assignments.clear()
 
 
+## 내 턴인지 확인한다(로컬은 항상 true - 전원이 한 화면을 같이 쓰므로
+## 턴 제한이 없다). 서버도 검사하지만 UI에서도 막는다(2-4에서 사용자가
+## 요구한 사항) - 남의 턴에 버튼을 눌러도 애초에 반응하지 않는다.
+func _is_my_turn() -> bool:
+	return my_player_index == -1 or my_player_index == game_state.current_player
+
+
 func _on_dice_gui_input(event: InputEvent, index: int) -> void:
-	if not game_state.has_rolled:
+	if not game_state.has_rolled or not _is_my_turn() or active_controller.is_request_pending():
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		game_state.toggle_lock(index)
+		active_controller.request_hold(index)
 
 
 func _on_roll_button_pressed() -> void:
 	selected_category = -1
-	game_state.roll()
+	active_controller.request_roll()
 
 
 func _on_select_category_pressed(index: int) -> void:
@@ -490,7 +547,7 @@ func _on_confirm_score_pressed() -> void:
 		return
 	var category := selected_category
 	selected_category = -1
-	game_state.confirm_category(category)
+	active_controller.request_score(category)
 
 
 func _on_portrait_stack_resized() -> void:
@@ -753,7 +810,7 @@ func _refresh_dice_ui() -> void:
 
 func _refresh_reroll_ui() -> void:
 	reroll_label.text = "남은 굴리기: %d" % game_state.rolls_left
-	roll_button.disabled = game_state.rolls_left <= 0
+	roll_button.disabled = game_state.rolls_left <= 0 or not _is_my_turn() or active_controller.is_request_pending()
 
 
 func _refresh_turn_ui() -> void:
@@ -824,14 +881,14 @@ func _refresh_scoreboard_ui() -> void:
 
 
 func _refresh_confirm_score_button() -> void:
-	if selected_category == -1 or game_state.game_over or not game_state.has_rolled:
+	if selected_category == -1 or game_state.game_over or not game_state.has_rolled or not _is_my_turn():
 		confirm_score_button.disabled = true
 		confirm_score_button.text = "점수 확정"
 		return
 
 	var category_name := GameState.CATEGORY_NAMES[selected_category]
 	var points := game_state.preview_score(selected_category)
-	confirm_score_button.disabled = false
+	confirm_score_button.disabled = active_controller.is_request_pending()
 	confirm_score_button.text = "%s %d점으로 확정" % [category_name, points]
 
 
@@ -859,6 +916,10 @@ func _refresh_game_over_ui() -> void:
 
 	game_over_label.text = "게임 종료!\n%s\n%s" % [result_text, _build_score_summary_text()]
 	game_over_overlay.visible = true
+
+	# 온라인 재대전(같은 방에서 다시 시작) 흐름은 이번 범위 밖이다 - 로컬
+	# 전용 "다시 하기"만 남기고, 온라인은 "타이틀로"만 제공한다.
+	restart_button.visible = (my_player_index == -1)
 
 
 func _build_score_summary_text() -> String:

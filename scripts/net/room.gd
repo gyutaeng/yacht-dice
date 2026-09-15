@@ -120,6 +120,55 @@ func change_capacity(new_capacity: int) -> bool:
 	return true
 
 
+## 턴 기반 요청(request_roll/hold/score) 검증 - docs/multiplayer.md §4.
+## 네트워크를 몰라야 하므로(RoomManager와 같은 이유) 순수 로직으로 두고
+## 빈 문자열(통과) 또는 NetProtocol 에러 코드 문자열을 돌려준다.
+## server_main.gd는 이 결과만 보고 error 메시지를 만들거나 실제 GameState
+## 메서드를 부른다.
+func _validate_turn(peer_id: int) -> String:
+	if state != State.IN_GAME or game_state.game_over:
+		return NetProtocol.ERROR_NOT_IN_GAME
+	if find_slot_by_peer(peer_id) != game_state.current_player:
+		return NetProtocol.ERROR_NOT_YOUR_TURN
+	return ""
+
+
+func validate_roll(peer_id: int) -> String:
+	var turn_error := _validate_turn(peer_id)
+	if turn_error != "":
+		return turn_error
+	if game_state.rolls_left <= 0:
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	return ""
+
+
+## has_rolled 검사는 1-3B에서 첫 굴림을 플레이어가 직접 하도록 바꾼 것과
+## 짝을 이룬다 - 굴리기 전에는 고정할 주사위 값 자체가 없다.
+func validate_hold(peer_id: int, index: int) -> String:
+	var turn_error := _validate_turn(peer_id)
+	if turn_error != "":
+		return turn_error
+	if index < 0 or index >= game_state.dice_results.size():
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	if not game_state.has_rolled:
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	return ""
+
+
+func validate_score(peer_id: int, category: int) -> String:
+	var turn_error := _validate_turn(peer_id)
+	if turn_error != "":
+		return turn_error
+	if category < 0 or category >= GameState.CATEGORY_NAMES.size():
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	if not game_state.has_rolled:
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	var slot_index := find_slot_by_peer(peer_id)
+	if game_state.is_category_confirmed(slot_index, category):
+		return NetProtocol.ERROR_INVALID_ARGUMENT
+	return ""
+
+
 ## 참가자 목록을 room_joined 응답의 players 필드 형태로 만든다
 ## (docs/multiplayer.md §2.2: Array[{player_index, meta, ready}]).
 func players_summary() -> Array:
