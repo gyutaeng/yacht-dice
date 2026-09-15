@@ -1,0 +1,171 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scenes/online/online_screen.gd" id="1_script"]
+
+[node name="OnlineScreen" type="Control"]
+anchors_preset = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_script")
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer"]
+layout_mode = 2
+theme_override_constants/separation = 16
+custom_minimum_size = Vector2(360, 0)
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "온라인 게임"
+horizontal_alignment = 1
+
+[node name="ConnectPanel" type="VBoxContainer" parent="CenterContainer/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ServerRow" type="HBoxContainer" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="CenterContainer/VBox/ConnectPanel/ServerRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "서버 주소"
+
+[node name="ServerAddressEdit" type="LineEdit" parent="CenterContainer/VBox/ConnectPanel/ServerRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="NicknameRow" type="HBoxContainer" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="CenterContainer/VBox/ConnectPanel/NicknameRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "닉네임"
+
+[node name="NicknameEdit" type="LineEdit" parent="CenterContainer/VBox/ConnectPanel/NicknameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ConnectStatusLabel" type="Label" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+autowrap_mode = 2
+horizontal_alignment = 1
+modulate = Color(1, 0.6, 0.6, 1)
+
+[node name="ActionButtonsRow" type="HBoxContainer" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 16
+
+[node name="CreateRoomButton" type="Button" parent="CenterContainer/VBox/ConnectPanel/ActionButtonsRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 44)
+text = "방 만들기"
+
+[node name="JoinRoomButton" type="Button" parent="CenterContainer/VBox/ConnectPanel/ActionButtonsRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 44)
+text = "방 참가"
+
+[node name="CreateRoomCountRow" type="HBoxContainer" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+visible = false
+
+[node name="Create2Button" type="Button" parent="CenterContainer/VBox/ConnectPanel/CreateRoomCountRow"]
+layout_mode = 2
+text = "2명"
+
+[node name="Create3Button" type="Button" parent="CenterContainer/VBox/ConnectPanel/CreateRoomCountRow"]
+layout_mode = 2
+text = "3명"
+
+[node name="Create4Button" type="Button" parent="CenterContainer/VBox/ConnectPanel/CreateRoomCountRow"]
+layout_mode = 2
+text = "4명"
+
+[node name="JoinRoomRow" type="HBoxContainer" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 8
+visible = false
+
+[node name="CodeEdit" type="LineEdit" parent="CenterContainer/VBox/ConnectPanel/JoinRoomRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 0)
+max_length = 4
+placeholder_text = "방 코드"
+
+[node name="JoinConfirmButton" type="Button" parent="CenterContainer/VBox/ConnectPanel/JoinRoomRow"]
+layout_mode = 2
+text = "입장"
+
+[node name="ConnectBackButton" type="Button" parent="CenterContainer/VBox/ConnectPanel"]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "뒤로"
+
+[node name="LobbyPanel" type="VBoxContainer" parent="CenterContainer/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+visible = false
+
+[node name="RoomCodeLabel" type="Label" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 36
+horizontal_alignment = 1
+
+[node name="CapacityLabel" type="Label" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="HostCountRow" type="HBoxContainer" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 8
+visible = false
+
+[node name="Label" type="Label" parent="CenterContainer/VBox/LobbyPanel/HostCountRow"]
+layout_mode = 2
+text = "인원수:"
+
+[node name="Count2Button" type="Button" parent="CenterContainer/VBox/LobbyPanel/HostCountRow"]
+layout_mode = 2
+text = "2명"
+
+[node name="Count3Button" type="Button" parent="CenterContainer/VBox/LobbyPanel/HostCountRow"]
+layout_mode = 2
+text = "3명"
+
+[node name="Count4Button" type="Button" parent="CenterContainer/VBox/LobbyPanel/HostCountRow"]
+layout_mode = 2
+text = "4명"
+
+[node name="ParticipantsList" type="VBoxContainer" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="ReadyButton" type="Button" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+size_flags_horizontal = 4
+custom_minimum_size = Vector2(140, 44)
+text = "준비 완료"
+
+[node name="LobbyStatusLabel" type="Label" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+autowrap_mode = 2
+horizontal_alignment = 1
+
+[node name="LeaveButton" type="Button" parent="CenterContainer/VBox/LobbyPanel"]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "나가기"

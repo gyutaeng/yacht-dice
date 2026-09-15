@@ -26,6 +26,9 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_debug_log.gd"),
 	preload("res://scripts/tests/suites/test_game_start_builtin_only.gd"),
 	preload("res://scripts/tests/suites/test_auto_confirm.gd"),
+	preload("res://scripts/tests/suites/test_protocol.gd"),
+	preload("res://scripts/tests/suites/test_session_store.gd"),
+	preload("res://scripts/tests/suites/test_room_manager.gd"),
 ]
 
 

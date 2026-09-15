@@ -51,6 +51,8 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - 1-6: 캐릭터 편집 UI(CharacterEditor) + 게임 시작 전 캐릭터 선택 화면 — **완료. 데스크톱·웹 양쪽에서 전체 흐름 실제 확인(특수 족보 연출 포함).**
 - 1-7: 캐릭터 팩(.ydchar.zip 내보내기/가져오기) — **데스크톱은 실제 클릭까지 확인 완료. 웹은 export만 했고 사용자의 브라우저 확인이 아직 안 됨.**
 - 2-1: 멀티플레이 설계 문서(`docs/multiplayer.md`) + GameState headless 검증(`server_main.gd`) — **완료.**
+- 2-3: WebSocket 연결 + 방 관리(게임 동기화 제외) — **완료.** 실제 소켓으로
+  수동 검증(아래 요약)까지 마침, 사용자의 에디터 다중 인스턴스 확인은 아직.
 
 ### 1-5(파일 선택) 완료 요약
 - 데스크톱: `FilePickerDesktop`(Godot `FileDialog` + 백그라운드 스레드 읽기)으로 검증 완료.
@@ -105,8 +107,85 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - **결론을 못 냈다.** 진단값이 데스크톱과 동일해서 로직상 문제를 못 찾았고, 그렇다고 "고쳤다"고 단정할 수도 없다. **사용자가 브라우저에서 직접 다시 확인이 필요함.** 안 보이면 진단 로그(화면 좌상단)에 "특수족보 연출 시작"이 실제로 찍히는지부터 확인해달라고 요청할 것 - 그것조차 안 찍히면 시그널 전달 자체가 문제고, 찍히는데 안 보이면 렌더링/z-order 쪽을 더 파야 한다.
 - **볼드체 적용**: `special_hand_label`에 `Pretendard-Bold.otf`(이미 있던 파일)를 `add_theme_font_override("font", bold_font)`로 적용했다. ExtraBold(OFL, jsdelivr에서 받아봄, 1.5MB)도 비교해보려 했으나 위 재현 문제로 나란히 비교할 시간을 못 냈고, 우선 Bold로 반영 후 제거했다(저장소에 안 남음) — 사용자가 실제로 보고 부족하다고 판단하면 그때 ExtraBold/Black을 다시 받아 비교하기로 함(둘 다 같은 OFL 라이선스, 파일 크기도 비슷해서 웹 빌드 용량에 미치는 영향은 미미함 - Bold를 ExtraBold로 "교체"하면 순증가는 없고, "추가"하면 약 1.5MB 늘어남).
 
+### 2-3(WebSocket 연결 + 방 관리) 완료 요약
+`docs/multiplayer.md`의 메시지 규약을 그대로 따랐다 - 게임 진행 동기화
+(주사위/점수, request_roll 등)는 이번 범위 밖이고 연결·로비·방 관리까지만.
+
+- **문서와 다르게 구현한 부분(사전에 확인받음)**: 문서 §9 결정 1("방 인원은
+  생성 시점에 고정")과 달리, 로비 중 방장이 인원수를 낮출 수 있어야 한다는
+  요구사항이 있어 `set_player_count`(C→S)/`room_player_count_changed`(S→C)
+  메시지를 새로 추가했다(사용자가 미리 승인).
+- **문서에 없어서 이번에 채운 것들**: 에러 코드 `NOT_HOST`/`GAME_ALREADY_STARTED`.
+  방장 판정 규칙(별도 필드 없이 "현재 채워진 슬롯 중 가장 낮은 인덱스").
+  `room_joined` 응답에 문서에 없던 `player_count` 필드를 추가(클라이언트가
+  "인원 N/M"을 그리려면 목표 인원을 알아야 하는데 `players` 배열만으로는
+  알 수 없어서 - §2.0의 "기본값 있는 선택적 필드 추가는 버전을 안 올려도
+  된다"는 규칙 안에서의 추가).
+- **새 파일**: `scripts/net/protocol.gd`(NetProtocol - 메시지 상수 +
+  JSON 인코드/디코드), `scripts/net/secure_random.gd`(SecureRandom -
+  2-1의 `_generate_secure_seed()`를 여기로 옮김), `scripts/net/room.gd`(Room -
+  방 하나의 상태: 슬롯 배열/로비 상태 기계/GameState+RNG), `scripts/net/room_manager.gd`(RoomManager -
+  방 코드 발급/라우팅, 네트워크를 전혀 모르는 순수 로직), `scripts/net/game_client.gd`(GameClient -
+  클라이언트 쪽 WebSocketMultiplayerPeer + 프로토콜 상태 기계, GameEvents와
+  같은 패턴으로 시그널만 emit), `scripts/net/session_store.gd`(SessionStore -
+  재접속 토큰을 `user://session.json`에 저장 - **이번 단계는 발급/저장까지만,
+  실제 재접속 매칭은 2-6**), `scenes/online/online_screen.tscn`+`.gd`(온라인
+  화면 - 서버 접속/방 만들기·참가/로비).
+- **방마다 독립된 RNG**: `Room._init()`이 `SecureRandom.generate_seed()`로
+  방 전용 시드를 새로 뽑는다(서버 전체가 RNG를 공유하면 한 방에서 본
+  주사위로 다른 방 결과를 추론할 여지가 생기므로 절대 공유하지 않음).
+  로비 중 `set_player_count`로 인원이 바뀌면 **같은 RNG 인스턴스를
+  재사용**해 `GameState`만 다시 만든다(`GameState._init()`은 생성 시점에
+  주사위를 안 굴리므로 안전 - `roll()`을 실제로 부르기 전까지 RNG를
+  소모하지 않음).
+- **`server_main.gd`를 REPL에서 실제 서버로 완전히 교체**: 2-1에서 만든
+  `roll`/`hold`/`score`/`state`/`auto`/`quit` 콘솔 명령은 전부 없앴다 -
+  `OS.read_string_from_stdin()`은 블로킹이라 `_process()`로 소켓을
+  폴링해야 하는 서버 루프와 같이 못 쓴다(2-1에서 실측 확인한 사실 그대로
+  재확인됨). 이제 서버 종료는 프로세스를 직접 끊는 방식(Ctrl+C)이다. 포트는
+  CLI 인자 → `YACHT_DICE_PORT` 환경변수 → 기본값 8910 순.
+- **시작 화면을 로컬/온라인으로 분기**: `Main.tscn`의 StartScreen에
+  `ModeChoiceRow`([로컬 게임]/[온라인 게임])를 추가하고, 기존
+  인원수 선택 UI는 `LocalGamePanel`로 묶어서 숨김 처리했다. 기존 로컬
+  플레이 흐름(2/3/4인 버튼 → 캐릭터 선택 → 게임)은 코드/시그널을 전혀
+  안 건드렸다 - `test_game_start_builtin_only.gd`가 여전히 통과하는 것으로
+  구조적 회귀는 없음을 확인했지만, **버튼을 실제로 눌러보는 화면 확인은
+  아직 사용자 몫**(에디터에서 직접).
+- **수동으로 실제 소켓 검증까지 마침**(자동 회귀 테스트에는 안 넣음 - 실제
+  TCP 연결이 필요해서 헤드리스 테스트 스위트의 성격과 안 맞음): 서버를
+  실제로 띄우고 클라이언트 역할을 하는 임시 스크립트로 다음을 전부
+  확인했다 - hello 핸드셰이크, 방 생성/참가, 캐릭터 메타 브로드캐스트,
+  방장의 `set_player_count`(3→2)와 그 순간 바로 반영되는 정원, 전원 준비
+  시 자동 시작(game_started), 방 없음/방장 아닌 사람의 인원수 변경 시도
+  에러 응답, 프로토콜 버전 불일치 시 연결 종료, 메시지 크기 초과 시 연결
+  종료.
+  - **수동 검증 중 실제 버그 하나 발견하고 수정**: 방의 두 참가자가 거의
+    동시에 나가면(연결이 이미 닫힌 상대에게) `player_left` 알림을
+    보내려다 엔진이 "ready_state != STATE_OPEN" ERROR를 콘솔에 남겼다
+    (크래시는 아니고 계속 진행되지만 로그가 지저분함). `server_main.gd`의
+    `_send()`가 보내기 전에 `WebSocketPeer.get_ready_state() == STATE_OPEN`을
+    먼저 확인하도록 고쳤다.
+- 새 테스트 33개(`test_protocol.gd`/`test_session_store.gd`/`test_room_manager.gd`) -
+  전체 522개 통과. `GameClient`/`server_main.gd`의 실제 소켓 동작 자체는
+  이 테스트들이 다루지 않는다(위 수동 검증으로 커버).
+- **남은 것**: 사용자가 직접 Godot 에디터의 "Run Multiple Instances"로
+  클라이언트 여러 개를 띄워 실제 화면으로 확인(수동 소켓 검증은 화면 없이
+  스크립트로만 했음), 로컬 모드 화면 확인.
+
+### 2-3 후속 — 닉네임(display_name) 검증 보강
+2-3 검토 중 사용자가 지적: 닉네임은 남의 화면에 그대로 뜨는 값인데 검사가
+없었다. `NetProtocol`(클라이언트/서버 공유)에 `MAX_DISPLAY_NAME_LENGTH`(20 →
+**12자**로 조정)와 `sanitize_display_name()`(제어문자 제거 + 양끝 공백
+제거 + 길이 제한)을 추가하고, 온라인 화면의 `NicknameEdit.max_length`도
+이 값으로 맞춰 입력 자체를 막는다. **서버(`server_main.gd`)가 받은 뒤
+다시 한번 같은 함수로 정리한다** - 클라이언트가 보낸 값을 그대로 믿지
+않는다(원칙 6). 정리 후 빈 문자열이면(제어문자/공백뿐이었으면) 서버가
+슬롯 번호로 "플레이어 N" 기본값을 채운다. 새 테스트 4개, 실제 소켓으로
+"제어문자+30자 닉네임 → 12자로 정리됨"/"빈 닉네임 → 플레이어 N"까지
+수동 확인함. 전체 526개 테스트 통과.
+
 ### 현재 전체 테스트 개수
-482개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+526개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 `DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은
@@ -428,5 +507,5 @@ export할 때 항상 출력 경로를 명시적으로 넘겨서(`--export-releas
 - 1-8: `docs/web_verification_checklist.md`대로 웹 전체 점검(사용자가 직접
   브라우저에서 진행 중) - 캐릭터 편집 화면, 캐릭터 팩, 업로드 제한, 시크릿
   모드, 오디오 자동재생 정책, 메모리, 창 크기 변경까지.
-- Phase 2: 온라인 멀티플레이 (2-1 완료, 다음은 `docs/multiplayer.md`의
-  2-2부터 - 네트워크는 아직 하나도 안 붙임)
+- Phase 2: 온라인 멀티플레이 (2-1·2-3 완료 - 2-3에서 연결·방 관리까지
+  붙었고, 게임 진행 동기화(2-4: request_roll/state_snapshot 등)는 아직)

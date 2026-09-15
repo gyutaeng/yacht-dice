@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://bahupo0io1w3n" path="res://scenes/Main.gd" id="1_script"]
 [ext_resource type="Script" uid="uid://yygi4w0ce8kc" path="res://scripts/dev/debug_hotkeys.gd" id="2_script"]
 [ext_resource type="Script" path="res://scenes/character_select_panel.gd" id="4_select"]
+[ext_resource type="PackedScene" path="res://scenes/online/online_screen.tscn" id="5_online"]
 
 [node name="Main" type="Control" unique_id=344423488]
 layout_mode = 3
@@ -32,34 +33,62 @@ theme_override_font_sizes/font_size = 40
 text = "요트다이스"
 horizontal_alignment = 1
 
-[node name="SubtitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox" unique_id=1427528520]
+[node name="ModeChoiceRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="LocalGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow"]
+custom_minimum_size = Vector2(140, 60)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "로컬 게임"
+
+[node name="OnlineGameButton" type="Button" parent="StartScreen/CenterContainer/VBox/ModeChoiceRow"]
+custom_minimum_size = Vector2(140, 60)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "온라인 게임"
+
+[node name="LocalGamePanel" type="VBoxContainer" parent="StartScreen/CenterContainer/VBox"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="SubtitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox/LocalGamePanel" unique_id=1427528520]
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "인원수를 선택하세요"
 horizontal_alignment = 1
 
-[node name="PlayerCountRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox" unique_id=1903019093]
+[node name="PlayerCountRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox/LocalGamePanel" unique_id=1903019093]
 layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="Players2Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=1359441607]
+[node name="Players2Button" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow" unique_id=1359441607]
 custom_minimum_size = Vector2(120, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "2명"
 
-[node name="Players3Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=2136848829]
+[node name="Players3Button" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow" unique_id=2136848829]
 custom_minimum_size = Vector2(120, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "3명"
 
-[node name="Players4Button" type="Button" parent="StartScreen/CenterContainer/VBox/PlayerCountRow" unique_id=454485882]
+[node name="Players4Button" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow" unique_id=454485882]
 custom_minimum_size = Vector2(120, 60)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "4명"
+
+[node name="LocalBackButton" type="Button" parent="StartScreen/CenterContainer/VBox/LocalGamePanel"]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "뒤로"
 
 [node name="ManageCharactersButton" type="Button" parent="StartScreen/CenterContainer/VBox"]
 custom_minimum_size = Vector2(160, 44)
@@ -109,6 +138,11 @@ text = "뒤로"
 custom_minimum_size = Vector2(120, 48)
 layout_mode = 2
 text = "시작"
+
+[node name="OnlineScreen" parent="." instance=ExtResource("5_online")]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
 
 [node name="GameScreen" type="Control" parent="." unique_id=891039919]
 visible = false

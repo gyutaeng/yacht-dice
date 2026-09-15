@@ -5,7 +5,7 @@ extends Control
 # 예전엔 버튼 핸들러마다 각자 visible을 켜고 꺼서, 하나를 끄는 걸 빠뜨리면
 # 안 보여야 할 화면이 뒤에 투명하게 남아 클릭을 가로채는 버그가 있었다.
 # GameOverOverlay는 GAME 위에 뜨는 모달이라 이 enum에 안 넣는다(별도 관리).
-enum Screen { START, CHARACTER_SELECT, GAME }
+enum Screen { START, CHARACTER_SELECT, GAME, ONLINE }
 
 const ROW_HEIGHT := 26.0
 const SMALL_TAG_SIZE := 56.0
@@ -56,12 +56,18 @@ var _greeting_active: bool = false
 
 @onready var start_screen: Control = $StartScreen
 @onready var game_screen: Control = $GameScreen
-@onready var players_2_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players2Button
-@onready var players_3_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players3Button
-@onready var players_4_button: Button = $StartScreen/CenterContainer/VBox/PlayerCountRow/Players4Button
+@onready var mode_choice_row: HBoxContainer = $StartScreen/CenterContainer/VBox/ModeChoiceRow
+@onready var local_game_button: Button = $StartScreen/CenterContainer/VBox/ModeChoiceRow/LocalGameButton
+@onready var online_game_button: Button = $StartScreen/CenterContainer/VBox/ModeChoiceRow/OnlineGameButton
+@onready var local_game_panel: VBoxContainer = $StartScreen/CenterContainer/VBox/LocalGamePanel
+@onready var local_back_button: Button = $StartScreen/CenterContainer/VBox/LocalGamePanel/LocalBackButton
+@onready var players_2_button: Button = $StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow/Players2Button
+@onready var players_3_button: Button = $StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow/Players3Button
+@onready var players_4_button: Button = $StartScreen/CenterContainer/VBox/LocalGamePanel/PlayerCountRow/Players4Button
 @onready var manage_characters_button: Button = $StartScreen/CenterContainer/VBox/ManageCharactersButton
 
 @onready var character_select_screen = $CharacterSelectScreen
+@onready var online_screen = $OnlineScreen
 
 @onready var turn_label: Label = $GameScreen/Margin/MainHBox/RightColumn/TurnLabel
 @onready var big_portrait_area: PanelContainer = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea
@@ -180,8 +186,14 @@ func _ready() -> void:
 	players_4_button.pressed.connect(_on_start_pressed.bind(4))
 	manage_characters_button.pressed.connect(_on_manage_characters_pressed)
 
+	local_game_button.pressed.connect(_on_local_game_button_pressed)
+	local_back_button.pressed.connect(_on_local_back_button_pressed)
+	online_game_button.pressed.connect(_on_online_game_button_pressed)
+
 	character_select_screen.selection_confirmed.connect(_on_character_selection_confirmed)
 	character_select_screen.back_requested.connect(_on_character_select_back)
+
+	online_screen.back_requested.connect(_on_online_back_requested)
 
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
@@ -206,6 +218,12 @@ func _ready() -> void:
 		label.gui_input.connect(_on_dice_gui_input.bind(i))
 
 	debug_init_log.visible = BuildInfo.DEBUG_MODE
+
+	# 온라인 재접속 UI는 아직 없다(2-6에서 구현) - 지금은 이전 세션이
+	# 저장되어 있었는지 콘솔에만 알린다(docs/multiplayer.md §6).
+	var saved_session = SessionStore.load()
+	if saved_session != null:
+		print("이전 세션 발견: 방 %s (복귀 UI는 아직 없습니다)" % saved_session.get("code", "?"))
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -284,6 +302,7 @@ func _show_screen(screen: Screen) -> void:
 	start_screen.visible = (screen == Screen.START)
 	character_select_screen.visible = (screen == Screen.CHARACTER_SELECT)
 	game_screen.visible = (screen == Screen.GAME)
+	online_screen.visible = (screen == Screen.ONLINE)
 
 
 func _on_start_pressed(player_count: int) -> void:
@@ -293,6 +312,34 @@ func _on_start_pressed(player_count: int) -> void:
 
 func _on_character_select_back() -> void:
 	_show_screen(Screen.START)
+
+
+## [로컬 게임]/[온라인 게임] 중 하나를 고르기 전의 기본 상태로 되돌린다 -
+## 온라인 화면에서 뒤로 나올 때처럼 "완전히 다른 모드에서 돌아온" 경우에만
+## 쓴다. 로컬 인원수 화면(캐릭터 선택 등)에서 뒤로 오는 경로는 이 함수를
+## 안 거치므로 LocalGamePanel이 계속 보인 채로 남는다(의도한 동작).
+func _show_mode_choice() -> void:
+	mode_choice_row.visible = true
+	local_game_panel.visible = false
+
+
+func _on_local_game_button_pressed() -> void:
+	mode_choice_row.visible = false
+	local_game_panel.visible = true
+
+
+func _on_local_back_button_pressed() -> void:
+	_show_mode_choice()
+
+
+func _on_online_game_button_pressed() -> void:
+	online_screen.reset_to_start()
+	_show_screen(Screen.ONLINE)
+
+
+func _on_online_back_requested() -> void:
+	_show_screen(Screen.START)
+	_show_mode_choice()
 
 
 func _on_character_selection_confirmed(profiles: Array[CharacterProfile]) -> void:

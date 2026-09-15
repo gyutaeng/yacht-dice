@@ -1,249 +1,355 @@
 extends Node
 
-# 화면도 네트워크도 없이 GameState 하나만으로 한 판을 끝까지 돌릴 수 있는지
-# 확인하기 위한 콘솔 진입점(docs/multiplayer.md §2-1). 실행:
+# 온라인 멀티플레이 전용 서버 진입점(docs/multiplayer.md, 2-3). 실행:
 #
-#   godot --headless --path . res://server_main.tscn -- <인원수>
+#   godot --headless --path . res://server_main.tscn -- <포트>
 #
-# <인원수>는 생략 가능(기본 2), 2~4 범위를 벗어나면 GameState._init()이
-# 스스로 경고를 찍고 기본값 2로 시작한다.
+# 포트는 CLI 인자(생략 가능) -> YACHT_DICE_PORT 환경변수 -> 기본값 8910
+# 순서로 정해진다.
 #
-# 명령: roll / hold <번호...> / score <족보키> / state / auto / quit
+# 2-1에서 이 파일은 GameState 하나를 콘솔 명령(roll/hold/score/...)으로
+# 조종하는 headless 검증 도구였다. 이제 실제 서버를 붙이므로 그 REPL은
+# 완전히 대체됐다 - OS.read_string_from_stdin()은 블로킹이라 _process()
+# 안에서 폴링해야 하는 서버 루프와 같이 쓸 수 없다(2-1에서 실측 확인).
+# 그래서 서버 종료는 콘솔 명령이 아니라 프로세스를 직접 끊는 방식(Ctrl+C)이다.
+#
+# 이 파일은 "패킷을 받아서 RoomManager를 부르고 결과를 다시 패킷으로
+# 보낸다"는 배선 역할만 한다 - 방/참가자 상태를 직접 들고 있지 않는다
+# (RoomManager/Room이 네트워크를 몰라야 헤드리스로 테스트할 수 있으므로).
 
-const GameStateScript = preload("res://scripts/game_state.gd")
+const DEFAULT_PORT := 8910
+const PORT_ENV_VAR := "YACHT_DICE_PORT"
 
-const CATEGORY_KEYS := {
-	"aces": 0,
-	"deuces": 1,
-	"threes": 2,
-	"fours": 3,
-	"fives": 4,
-	"sixes": 5,
-	"choice": 6,
-	"four_of_a_kind": 7,
-	"full_house": 8,
-	"small_straight": 9,
-	"large_straight": 10,
-	"yacht": 11,
-}
+var peer := WebSocketMultiplayerPeer.new()
+var room_manager := RoomManager.new()
 
-var game_state: GameState
-
-
-## 서버 주사위 시드는 예측 가능하면 안 된다 - 이 값을 미리 알면 앞으로
-## 나올 주사위를 전부 계산할 수 있어서, "서버가 굴리니까 치팅이 불가능하다"는
-## Phase 2의 전제(docs/multiplayer.md §0)가 조작 없이도 무너진다. 그래서
-## RandomNumberGenerator.randomize()(시각 기반) 대신, OS 엔트로피를 쓰는
-## Crypto.generate_random_bytes()로 시드를 만든다.
-## 이 함수는 server_main.gd(headless 서버 전용 진입점)에서만 쓴다 -
-## docs/multiplayer.md §0에 따라 서버는 절대 Web export로 돌지 않고 항상
-## 네이티브 headless 바이너리로만 돌기 때문에, Crypto의 웹 export 동작
-## 여부는 이 경로에서는 따질 필요가 없다. 클라이언트 로컬(싱글) 모드는
-## GameState._init()이 자체적으로 randomize()를 쓰는 기존 경로를 그대로
-## 유지한다 - 다른 사람과 겨루는 게 아니라서 시드를 예측당해도 치팅 상대가
-## 없다.
-func _generate_secure_seed() -> int:
-	var bytes := Crypto.new().generate_random_bytes(8)
-	var seed_value := 0
-	for b in bytes:
-		seed_value = (seed_value << 8) | b
-	return seed_value
+# hello 확인 전인 접속을 추적한다 - 5초 안에 hello가 안 오면 끊는다(§2.0).
+var _pending_since: Dictionary = {}  # peer_id -> Time.get_ticks_msec()
+var _hello_confirmed: Dictionary = {}  # peer_id -> true
 
 
 func _ready() -> void:
-	var player_count := GameState.DEFAULT_PLAYER_COUNT
+	var port := _resolve_port()
+	var err := peer.create_server(port)
+	if err != OK:
+		printerr("[서버] %d번 포트에서 시작할 수 없습니다 (%s)" % [port, error_string(err)])
+		get_tree().quit(1)
+		return
+
+	peer.peer_connected.connect(_on_peer_connected)
+	peer.peer_disconnected.connect(_on_peer_disconnected)
+
+	print("=== 요트다이스 서버 시작 (포트 %d) ===" % port)
+
+
+func _process(_delta: float) -> void:
+	peer.poll()
+
+	var now := Time.get_ticks_msec()
+	for id in _pending_since.keys():
+		if now - _pending_since[id] > NetProtocol.HELLO_TIMEOUT_SECONDS * 1000.0:
+			print("[서버] peer %d: %.0f초 안에 hello가 안 와서 연결 종료" % [id, NetProtocol.HELLO_TIMEOUT_SECONDS])
+			_pending_since.erase(id)
+			peer.disconnect_peer(id)
+
+	while peer.get_available_packet_count() > 0:
+		var sender_id := peer.get_packet_peer()
+		var bytes := peer.get_packet()
+		_handle_packet(sender_id, bytes)
+
+
+func _resolve_port() -> int:
 	var args := OS.get_cmdline_user_args()
 	if args.size() >= 1 and args[0].is_valid_int():
-		player_count = args[0].to_int()
+		return args[0].to_int()
 
-	var rng := RandomNumberGenerator.new()
-	rng.seed = _generate_secure_seed()
-	game_state = GameStateScript.new(player_count, rng)
-	game_state.start_turn()
+	var env_value := OS.get_environment(PORT_ENV_VAR)
+	if env_value != "" and env_value.is_valid_int():
+		return env_value.to_int()
 
-	print("=== 요트다이스 headless 서버 ===")
-	print("명령: roll / hold <번호...> / score <족보키> / state / auto / quit")
-	print("족보키: %s" % ", ".join(CATEGORY_KEYS.keys()))
-	_print_state()
-	_run_loop()
-
-	get_tree().quit()
+	return DEFAULT_PORT
 
 
-func _run_loop() -> void:
-	# OS.read_string_from_stdin()은 줄 단위가 아니라 그 순간 버퍼에 들어와
-	# 있는 만큼을 통째로 돌려준다 - 명령을 빠르게 이어 보내면(파이프 입력 등)
-	# 한 번의 호출에 여러 줄이 개행 문자와 함께 섞여서 들어올 수 있으므로,
-	# 직접 줄 단위로 잘라 큐에 쌓아두고 하나씩 처리한다.
-	var pending_lines: Array[String] = []
-	while true:
-		if pending_lines.is_empty():
-			var chunk := OS.read_string_from_stdin(1024)
-			for part in chunk.split("\n"):
-				var trimmed := part.strip_edges()
-				if trimmed != "":
-					pending_lines.append(trimmed)
-			if pending_lines.is_empty():
-				continue
-
-		var line: String = pending_lines.pop_front()
-		if not _handle_command(line):
-			break
-	print("서버를 종료합니다.")
+func _on_peer_connected(id: int) -> void:
+	print("[서버] 접속: peer %d" % id)
+	_pending_since[id] = Time.get_ticks_msec()
 
 
-func _handle_command(line: String) -> bool:
-	var tokens := line.split(" ", false)
-	var cmd := tokens[0].to_lower()
-	var args := tokens.slice(1)
+func _on_peer_disconnected(id: int) -> void:
+	print("[서버] 연결 해제: peer %d" % id)
+	_pending_since.erase(id)
+	_hello_confirmed.erase(id)
+	_remove_peer_and_notify(id, "disconnected")
 
-	match cmd:
-		"roll":
-			_cmd_roll()
-		"hold":
-			_cmd_hold(args)
-		"score":
-			_cmd_score(args)
-		"state":
-			_print_state()
-		"auto":
-			_cmd_auto()
-		"quit", "exit":
-			return false
+
+## 메시지 크기 상한(§2.0)을 넘으면 내용을 해석하지 않고 끊는다 - 다만 저수준
+## 패킷 API 특성상 바이트 자체는 이미 peer.get_packet()으로 받은 뒤다(더
+## 작은 크기를 미리 알아낼 방법이 없다). "해석하지 않는다"는 JSON으로
+## 파싱해 필드를 들여다보지 않는다는 뜻이다.
+func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
+	if bytes.size() > NetProtocol.MAX_MESSAGE_BYTES:
+		print("[서버] peer %d: 메시지 크기 초과(%d바이트) - 연결 종료" % [sender_id, bytes.size()])
+		peer.disconnect_peer(sender_id)
+		return
+
+	var msg = NetProtocol.decode(bytes)
+	if msg == null:
+		print("[서버] peer %d: 메시지 형식이 올바르지 않음 - 연결 종료" % sender_id)
+		peer.disconnect_peer(sender_id)
+		return
+
+	var type: String = msg["type"]
+	var payload: Dictionary = msg["payload"]
+
+	if not _hello_confirmed.get(sender_id, false):
+		if type != NetProtocol.MSG_HELLO:
+			print("[서버] peer %d: hello 전에 다른 메시지(%s) 수신 - 연결 종료" % [sender_id, type])
+			peer.disconnect_peer(sender_id)
+			return
+		_handle_hello(sender_id, payload)
+		return
+
+	match type:
+		NetProtocol.MSG_CREATE_ROOM:
+			_handle_create_room(sender_id, payload)
+		NetProtocol.MSG_JOIN_ROOM:
+			_handle_join_room(sender_id, payload)
+		NetProtocol.MSG_SELECT_CHARACTER:
+			_handle_select_character(sender_id, payload)
+		NetProtocol.MSG_READY:
+			_handle_ready(sender_id, payload)
+		NetProtocol.MSG_SET_PLAYER_COUNT:
+			_handle_set_player_count(sender_id, payload)
+		NetProtocol.MSG_LEAVE:
+			_handle_leave(sender_id, payload)
+		NetProtocol.MSG_HELLO:
+			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
-			print("알 수 없는 명령입니다: '%s'. 사용 가능: roll, hold <번호...>, score <족보키>, state, auto, quit" % cmd)
-	return true
+			_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "알 수 없는 메시지 타입입니다: %s" % type)
 
 
-func _cmd_roll() -> void:
-	if game_state.game_over:
-		print("게임이 이미 끝났습니다.")
-		return
-	if game_state.rolls_left <= 0:
-		print("리롤 횟수를 모두 사용했습니다.")
+func _handle_hello(sender_id: int, payload: Dictionary) -> void:
+	var version = payload.get("protocol_version")
+	if typeof(version) != TYPE_FLOAT and typeof(version) != TYPE_INT:
+		print("[서버] peer %d: hello에 protocol_version이 없거나 잘못됨 - 연결 종료" % sender_id)
+		peer.disconnect_peer(sender_id)
 		return
 
-	game_state.roll()
-	_print_state()
-
-
-func _cmd_hold(args: Array) -> void:
-	if game_state.game_over:
-		print("게임이 이미 끝났습니다.")
-		return
-	if not game_state.has_rolled:
-		print("아직 주사위를 굴리지 않았습니다.")
-		return
-	if args.is_empty():
-		print("고정할 주사위 번호를 입력하세요. 예: hold 2 4")
+	if int(version) != NetProtocol.PROTOCOL_VERSION:
+		print("[서버] peer %d: 버전 불일치(받음=%s, 서버=%d) - 연결 종료" % [sender_id, version, NetProtocol.PROTOCOL_VERSION])
+		_send_error(sender_id, NetProtocol.ERROR_PROTOCOL_MISMATCH, "게임 버전이 다릅니다. 새로고침해 주세요.")
+		peer.disconnect_peer(sender_id)
 		return
 
-	var dice_count := game_state.dice_results.size()
-	for a in args:
-		if not (a as String).is_valid_int():
-			print("주사위 번호는 숫자여야 합니다: '%s'" % a)
-			continue
-		var index := (a as String).to_int()
-		if index < 1 or index > dice_count:
-			print("주사위 번호는 1~%d 사이여야 합니다: %d" % [dice_count, index])
-			continue
-		game_state.toggle_lock(index - 1)
-
-	_print_state()
+	_hello_confirmed[sender_id] = true
+	_pending_since.erase(sender_id)
+	_send(sender_id, NetProtocol.MSG_HELLO_ACK, {"protocol_version": NetProtocol.PROTOCOL_VERSION})
 
 
-func _cmd_score(args: Array) -> void:
-	if game_state.game_over:
-		print("게임이 이미 끝났습니다.")
-		return
-	if not game_state.has_rolled:
-		print("아직 주사위를 굴리지 않았습니다.")
-		return
-	if args.is_empty():
-		print("확정할 족보 이름을 입력하세요. 예: score full_house")
+func _handle_create_room(sender_id: int, payload: Dictionary) -> void:
+	if room_manager.get_room_for_peer(sender_id) != null:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "이미 방에 들어가 있습니다.")
 		return
 
-	var key: String = args[0].to_lower()
-	if not CATEGORY_KEYS.has(key):
-		print("알 수 없는 족보 이름: '%s'. 사용 가능: %s" % [key, ", ".join(CATEGORY_KEYS.keys())])
+	var count = _payload_int(payload, "player_count")
+	if count == null or not RoomManager.is_valid_player_count(count):
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "인원수는 2~4명 사이여야 합니다.")
 		return
 
-	var category: int = CATEGORY_KEYS[key]
-	var player := game_state.current_player
-	if game_state.is_category_confirmed(player, category):
-		print("이미 확정된 칸입니다: %s" % GameState.CATEGORY_NAMES[category])
+	var room := room_manager.create_room(count, sender_id)
+	print("[서버] 방 생성: %s (인원 %d, 만든 사람 peer %d)" % [room.code, count, sender_id])
+
+	var slot: Dictionary = room.slots[0]
+	_send(sender_id, NetProtocol.MSG_ROOM_CREATED, {
+		"code": room.code,
+		"player_count": room.capacity,
+		"reconnect_token": slot["reconnect_token"],
+	})
+
+
+## reconnect_token이 페이로드에 와도(§2.1 join_room 선택 필드) 2-3 범위에서는
+## 아직 검증하지 않는다 - 실제 재접속 매칭은 2-6에서 구현한다. 지금은 토큰
+## 유무와 무관하게 항상 새 참가자로 처리한다.
+func _handle_join_room(sender_id: int, payload: Dictionary) -> void:
+	if room_manager.get_room_for_peer(sender_id) != null:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "이미 방에 들어가 있습니다.")
 		return
 
-	game_state.confirm_category(category)
-	print("플레이어 %d: %s 확정 (%d점)" % [player + 1, GameState.CATEGORY_NAMES[category], game_state.get_confirmed_score(player, category)])
-
-	if game_state.game_over:
-		_print_game_over()
-	else:
-		_print_state()
-
-
-func _cmd_auto() -> void:
-	if game_state.game_over:
-		print("게임이 이미 끝났습니다.")
+	var code = payload.get("code")
+	if typeof(code) != TYPE_STRING or code.is_empty():
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "방 코드가 필요합니다.")
 		return
 
-	var player := game_state.current_player
-	var category := game_state.auto_confirm_least_damaging(player)
-	if category == -1:
-		print("자동 확정을 할 수 없는 상태입니다.")
+	var result = room_manager.join_room(code, sender_id)
+	if result is String:
+		_send_error(sender_id, result, _join_error_message(result))
 		return
 
-	print("플레이어 %d: 자동으로 %s 확정 (%d점)" % [player + 1, GameState.CATEGORY_NAMES[category], game_state.get_confirmed_score(player, category)])
+	var room: Room = result
+	var my_index := room.find_slot_by_peer(sender_id)
+	var my_slot: Dictionary = room.slots[my_index]
+	print("[서버] 방 %s 참가: peer %d (슬롯 %d)" % [room.code, sender_id, my_index])
 
-	if game_state.game_over:
-		_print_game_over()
-	else:
-		_print_state()
-
-
-func _format_dice() -> String:
-	var parts: Array[String] = []
-	for i in game_state.dice_results.size():
-		var text := "?" if not game_state.has_rolled else str(game_state.dice_results[i])
-		if game_state.dice_locked[i]:
-			text = "[%s]" % text
-		parts.append(text)
-	return " ".join(parts)
-
-
-func _print_state() -> void:
-	print("")
-	print("=== 현재 상태 ===")
-	print("턴: 플레이어 %d / 남은 굴리기: %d" % [game_state.current_player + 1, game_state.rolls_left])
-	print("주사위: %s" % _format_dice())
-	print("")
-
-	for p in game_state.player_count:
-		var marker := " (현재 턴)" if p == game_state.current_player else ""
-		print("[플레이어 %d]%s" % [p + 1, marker])
-		for c in GameState.CATEGORY_NAMES.size():
-			var value_text := "-"
-			if game_state.is_category_confirmed(p, c):
-				value_text = str(game_state.get_confirmed_score(p, c))
-			print("  %s%s" % [GameState.CATEGORY_NAMES[c].rpad(16), value_text])
-
-		if game_state.has_upper_bonus(p):
-			print("  상단 합계: %d (보너스 +%d 달성)" % [game_state.get_upper_section_total(p), GameState.UPPER_BONUS_POINTS])
-		else:
-			print("  상단 합계: %d (보너스까지 %d점 남음)" % [game_state.get_upper_section_total(p), game_state.get_upper_bonus_remaining(p)])
-		print("  총점: %d" % game_state.get_player_total(p))
-		print("")
+	_send(sender_id, NetProtocol.MSG_ROOM_JOINED, {
+		"players": room.players_summary(),
+		"my_index": my_index,
+		"reconnect_token": my_slot["reconnect_token"],
+		# 문서(§2.2)의 room_joined 페이로드엔 없던 필드다 - 클라이언트가
+		# "인원 N/M"을 그리려면 목표 인원(capacity)을 알아야 하는데
+		# players 배열(현재 참가자)만으로는 알 수 없어서 추가했다. 기본값
+		# 있는 선택적 필드 추가라 §2.0 규칙상 버전을 안 올려도 된다.
+		"player_count": room.capacity,
+	})
+	_broadcast_room(room, NetProtocol.MSG_PLAYER_JOINED, {"player_index": my_index, "meta": {}}, sender_id)
 
 
-func _print_game_over() -> void:
-	print("=== 게임 종료 ===")
-	var winners := game_state.get_winners()
-	if winners.size() == 1:
-		var winner: int = winners[0]
-		print("승자: 플레이어 %d (총점 %d)" % [winner + 1, game_state.get_player_total(winner)])
-	else:
-		var names: Array[String] = []
-		for w in winners:
-			names.append("플레이어 %d" % (w + 1))
-		print("공동 우승: %s (총점 %d)" % [", ".join(names), game_state.get_player_total(winners[0])])
+func _join_error_message(code: String) -> String:
+	match code:
+		NetProtocol.ERROR_ROOM_NOT_FOUND:
+			return "그런 방을 찾을 수 없습니다."
+		NetProtocol.ERROR_ROOM_FULL:
+			return "방이 꽉 찼습니다."
+		NetProtocol.ERROR_GAME_ALREADY_STARTED:
+			return "이미 게임이 시작된 방입니다."
+		_:
+			return "방에 들어갈 수 없습니다."
+
+
+func _handle_select_character(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null:
+		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
+		return
+	if room.state != Room.State.LOBBY:
+		_send_error(sender_id, NetProtocol.ERROR_GAME_ALREADY_STARTED, "이미 게임이 시작되어 캐릭터를 바꿀 수 없습니다.")
+		return
+
+	var meta = payload.get("meta")
+	if typeof(meta) != TYPE_DICTIONARY:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "캐릭터 정보 형식이 올바르지 않습니다.")
+		return
+
+	# v1은 id/display_name만 의미 있게 쓴다(docs/multiplayer.md §8) - 그 외
+	# 필드가 와도 무시한다. display_name은 클라이언트가 뭘 보냈든 신뢰하지
+	# 않는다(원칙 6) - 남의 화면에 그대로 뜨는 값이라 클라이언트 쪽 검사만
+	# 믿으면 안 된다. 제어문자 제거·길이 제한은 NetProtocol에 클라이언트와
+	# 공유하는 기준으로 정의되어 있고, 정리 후 빈 문자열이면(제어문자만
+	# 보냈거나 공백뿐이었으면) 서버가 슬롯 번호로 기본값을 만든다.
+	var slot_index := room.find_slot_by_peer(sender_id)
+	var display_name := NetProtocol.sanitize_display_name(str(meta.get("display_name", "")))
+	if display_name.is_empty():
+		display_name = "플레이어 %d" % (slot_index + 1)
+	var safe_meta := {"id": str(meta.get("id", "")), "display_name": display_name}
+
+	room.slots[slot_index]["meta"] = safe_meta
+	_broadcast_room(room, NetProtocol.MSG_PLAYER_CHARACTER, {"player_index": slot_index, "meta": safe_meta})
+
+
+func _handle_ready(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null:
+		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
+		return
+	if room.state != Room.State.LOBBY:
+		_send_error(sender_id, NetProtocol.ERROR_GAME_ALREADY_STARTED, "이미 게임이 시작되었습니다.")
+		return
+
+	var ready_value = payload.get("ready")
+	if typeof(ready_value) != TYPE_BOOL:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "ready 값이 올바르지 않습니다.")
+		return
+
+	var slot_index := room.find_slot_by_peer(sender_id)
+	room.slots[slot_index]["ready"] = ready_value
+	_broadcast_room(room, NetProtocol.MSG_PLAYER_READY_CHANGED, {"player_index": slot_index, "ready": ready_value})
+
+	_maybe_start_game(room)
+
+
+func _handle_set_player_count(sender_id: int, payload: Dictionary) -> void:
+	var count = _payload_int(payload, "player_count")
+	if count == null:
+		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "인원수 값이 올바르지 않습니다.")
+		return
+
+	var result = room_manager.set_player_count(sender_id, count)
+	if result != null:
+		_send_error(sender_id, result, _set_player_count_error_message(result))
+		return
+
+	var room := room_manager.get_room_for_peer(sender_id)
+	_broadcast_room(room, NetProtocol.MSG_ROOM_PLAYER_COUNT_CHANGED, {"player_count": room.capacity})
+	_maybe_start_game(room)
+
+
+func _set_player_count_error_message(code: String) -> String:
+	match code:
+		NetProtocol.ERROR_ROOM_NOT_FOUND:
+			return "방에 들어가 있지 않습니다."
+		NetProtocol.ERROR_GAME_ALREADY_STARTED:
+			return "이미 게임이 시작되었습니다."
+		NetProtocol.ERROR_NOT_HOST:
+			return "방장만 인원수를 바꿀 수 있습니다."
+		NetProtocol.ERROR_INVALID_ARGUMENT:
+			return "인원수는 2~4명, 이미 들어온 인원보다는 낮출 수 없습니다."
+		_:
+			return "인원수를 바꿀 수 없습니다."
+
+
+func _handle_leave(sender_id: int, _payload: Dictionary) -> void:
+	_remove_peer_and_notify(sender_id, "left")
+
+
+func _remove_peer_and_notify(peer_id: int, reason: String) -> void:
+	var result := room_manager.remove_peer(peer_id)
+	var room = result["room"]
+	var slot_index: int = result["slot_index"]
+	if room != null and slot_index != -1:
+		_broadcast_room(room, NetProtocol.MSG_PLAYER_LEFT, {"player_index": slot_index, "reason": reason})
+
+
+## 정원이 다 차고 전원이 준비되면 자동 시작한다(§3). v1은 transferring에서
+## 실제로 전송할 캐릭터 자산이 없으므로(§8) 상태 기계를 거치되 즉시
+## 통과한다. state_snapshot 등 실제 게임 진행 동기화는 2-4에서 구현한다 -
+## 지금은 game_started만 보낸다(이번 작업 범위가 "연결과 방 관리까지").
+func _maybe_start_game(room: Room) -> void:
+	if room.state != Room.State.LOBBY or not room.all_ready():
+		return
+
+	room.state = Room.State.TRANSFERRING
+	room.state = Room.State.IN_GAME
+	print("[서버] 방 %s 게임 시작 (인원 %d)" % [room.code, room.capacity])
+	_broadcast_room(room, NetProtocol.MSG_GAME_STARTED, {"player_count": room.capacity})
+
+
+func _payload_int(payload: Dictionary, key: String) -> Variant:
+	if not payload.has(key):
+		return null
+	var value = payload[key]
+	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+		return null
+	return int(value)
+
+
+## 방 전원에게 알리는 도중(_broadcast_room) 그중 한 명의 연결이 이미
+## 끊긴 상태일 수 있다(예: 한 방의 두 참가자가 거의 동시에 나가면, 한쪽을
+## 정리하며 보내는 알림이 이미 닫히는 중인 다른 쪽으로 갈 수 있음) - 실제로
+## 수동 테스트 중 발견했다. 크래시는 아니지만(엔진이 ERROR 로그만 남기고
+## 계속 진행) 콘솔이 지저분해지므로, 보내기 전에 그 peer의 소켓이 아직
+## 열려 있는지 먼저 확인한다.
+func _send(peer_id: int, type: String, payload: Dictionary) -> void:
+	var ws_peer := peer.get_peer(peer_id)
+	if ws_peer == null or ws_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	peer.set_target_peer(peer_id)
+	peer.put_packet(NetProtocol.encode(type, payload))
+
+
+func _broadcast_room(room: Room, type: String, payload: Dictionary, exclude_peer_id: int = -1) -> void:
+	for slot in room.slots:
+		if slot != null and slot["peer_id"] != exclude_peer_id:
+			_send(slot["peer_id"], type, payload)
+
+
+func _send_error(peer_id: int, code: String, message: String) -> void:
+	_send(peer_id, NetProtocol.MSG_ERROR, {"code": code, "message": message})
