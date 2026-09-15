@@ -29,6 +29,18 @@ const FORMAT_VERSION := 1
 # 편집/삭제 버튼을 막을 수 있다(내장 캐릭터는 고칠 수도 지울 수도 없으므로).
 var is_builtin: bool = false
 
+# 이 두 필드도 manifest.json에 저장되지 않는다(is_builtin과 같은 런타임 전용
+# 패턴) - 2-5(캐릭터 팩 실시간 전송)에서 "남에게 받은 캐릭터"를 표현하는 데
+# 쓰인다. 평소(내 캐릭터)엔 둘 다 빈 값이고, 그럴 땐 기존처럼
+# user://characters/<id>/에서 읽는다.
+# - asset_base_dir: 비어있지 않으면 user://characters/<id> 대신 이 경로에서
+#   읽는다(받은 팩을 user://cache/received/<해시>/에 디스크 저장했을 때 씀).
+# - asset_bytes: 비어있지 않으면 디스크를 아예 안 거치고 이 안의 바이트를
+#   최우선으로 쓴다(파일명 -> PackedByteArray) - 시크릿 모드 등 저장이 막힌
+#   환경에서 받은 바이트를 그 판 한정으로 메모리에서만 쓸 때 쓴다.
+var asset_base_dir: String = ""
+var asset_bytes: Dictionary = {}
+
 
 func to_dict() -> Dictionary:
 	return {

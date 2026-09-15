@@ -10,6 +10,17 @@ const PROTOCOL_VERSION := 1
 const MAX_MESSAGE_BYTES := 65536
 const HELLO_TIMEOUT_SECONDS := 5.0
 
+# 2-5(캐릭터 팩 전송) §8 - 청크 페이로드(인코딩 전 원본)는 32KB다. 64KB(=
+# MAX_MESSAGE_BYTES)가 아니다 - Base64가 원본을 약 1.33배로 불리고 봉투
+# (타입/순번/총 개수 등 JSON 필드)까지 더해야 하므로, 32KB로 잡아야
+# 인코딩 후(약 43KB)에도 MAX_MESSAGE_BYTES 안에 넉넉히 들어온다.
+const CHUNK_PAYLOAD_BYTES := 32768
+
+# 서버가 실제로 강제하는 상한이지만, 클라이언트(PackTransferClient)도 로비
+# 화면에 "타임아웃까지 N초" 카운트다운을 보여주려면 같은 값을 알아야 해서
+# 여기 공유 파일에 둔다(HELLO_TIMEOUT_SECONDS와 같은 이유).
+const PACK_TRANSFER_TIMEOUT_MSEC := 60000
+
 # 닉네임(display_name)은 남의 화면에 그대로 뜨는 값이라 클라이언트가 보낸
 # 그대로 믿으면 안 된다(원칙 6). 상수/정리 함수를 여기 하나로 모아서
 # 클라이언트(scenes/online/online_screen.gd)와 서버(server_main.gd) 양쪽이
@@ -28,6 +39,10 @@ const MSG_LEAVE := "leave"
 const MSG_REQUEST_ROLL := "request_roll"
 const MSG_REQUEST_HOLD := "request_hold"
 const MSG_REQUEST_SCORE := "request_score"
+
+# 2-5(캐릭터 팩 전송) §2단계 - client -> server.
+const MSG_REQUEST_CHARACTER_PACK := "request_character_pack"
+const MSG_UPLOAD_PACK_CHUNK := "upload_pack_chunk"
 
 # 서버 -> 클라이언트
 const MSG_HELLO_ACK := "hello_ack"
@@ -61,6 +76,17 @@ const MSG_SCORE_COMMITTED := "score_committed"
 const MSG_YACHT_SCORED := "yacht_scored"
 const MSG_TURN_ENDED := "turn_ended"
 const MSG_GAME_STATE_STARTED := "game_state_started"
+
+# 2-5(캐릭터 팩 전송) §2단계 - server -> client. pack_upload_requested/
+# pack_transfer_failed는 관련자에게만 보내지 않고 방 전체에 방송한다 -
+# 요청을 안 한 사람도 "지금 누구 걸 기다리는지" UI를 갱신해야 하고, 그
+# 판단(내 해시인가/내가 요청한 해시인가/그냥 구경만 하는가)은 각 클라이언트가
+# 이미 알고 있는 정보(자기 해시, 자기가 보낸 요청)만으로 로컬에서 할 수
+# 있어서 서버가 수신자 목록을 따로 알려줄 필요가 없다.
+const MSG_TRANSFERRING_STARTED := "transferring_started"
+const MSG_PACK_UPLOAD_REQUESTED := "pack_upload_requested"
+const MSG_PACK_CHUNK := "pack_chunk"
+const MSG_PACK_TRANSFER_FAILED := "pack_transfer_failed"
 
 # 문서(§2.0/§4/§7)에 이름이 있는 에러 코드.
 const ERROR_PROTOCOL_MISMATCH := "PROTOCOL_MISMATCH"

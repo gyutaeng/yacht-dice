@@ -23,7 +23,7 @@ func run(r) -> void:
 	_test_check_voice_non_wav_no_advisory(r)
 	_test_check_voice_exceeds_limit(r)
 	_test_compute_pack_size(r)
-	_test_import_warns_on_oversized_portrait(r)
+	await _test_import_warns_on_oversized_portrait(r)
 
 
 func _make_test_profile(r, suffix: String) -> CharacterProfile:
@@ -123,7 +123,7 @@ func _test_import_warns_on_oversized_portrait(r) -> void:
 	CharacterLibrary.save_profile(profile)
 
 	var zip_bytes := CharacterLibrary.export_pack_bytes(profile)
-	var result := CharacterLibrary.import_pack(zip_bytes)
+	var result := await CharacterLibrary.import_pack(zip_bytes)
 
 	r.expect_true("한도를 넘어도 가져오기는 허용됨", result["ok"])
 	if result["ok"]:

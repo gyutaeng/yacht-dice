@@ -14,11 +14,11 @@ const TEST_ID_PREFIX := "test-character-pack-"
 func run(r) -> void:
 	r.begin_suite("CharacterLibrary 캐릭터 팩 내보내기/가져오기")
 
-	_test_round_trip_assigns_new_id(r)
-	_test_rejects_missing_manifest(r)
-	_test_rejects_invalid_manifest_schema(r)
-	_test_rejects_unsafe_paths(r)
-	_test_rejects_disallowed_extension(r)
+	await _test_round_trip_assigns_new_id(r)
+	await _test_rejects_missing_manifest(r)
+	await _test_rejects_invalid_manifest_schema(r)
+	await _test_rejects_unsafe_paths(r)
+	await _test_rejects_disallowed_extension(r)
 
 
 func _make_test_profile(r, suffix: String) -> CharacterProfile:
@@ -74,7 +74,7 @@ func _test_round_trip_assigns_new_id(r) -> void:
 	var zip_bytes := CharacterLibrary.export_pack_bytes(original)
 	r.expect_true("내보내기가 빈 바이트를 반환하지 않음", not zip_bytes.is_empty())
 
-	var result := CharacterLibrary.import_pack(zip_bytes)
+	var result := await CharacterLibrary.import_pack(zip_bytes)
 	r.expect_true("정상 팩은 가져오기에 성공함", result["ok"])
 
 	if result["ok"]:
@@ -97,7 +97,7 @@ func _test_round_trip_assigns_new_id(r) -> void:
 
 func _test_rejects_missing_manifest(r) -> void:
 	var zip_bytes := _zip_bytes_from_entries({"portrait.png": PackedByteArray([1, 2, 3])})
-	var result := CharacterLibrary.import_pack(zip_bytes)
+	var result := await CharacterLibrary.import_pack(zip_bytes)
 	r.expect_true("manifest.json이 없으면 거부함", not result["ok"])
 	r.expect_true("실패 이유에 manifest.json이 언급됨", result["error"].contains("manifest.json"))
 
@@ -105,7 +105,7 @@ func _test_rejects_missing_manifest(r) -> void:
 func _test_rejects_invalid_manifest_schema(r) -> void:
 	var bad_manifest := JSON.stringify({"format_version": 999, "id": "x", "display_name": "y", "voice_map": {}})
 	var zip_bytes := _zip_bytes_from_entries({"manifest.json": bad_manifest})
-	var result := CharacterLibrary.import_pack(zip_bytes)
+	var result := await CharacterLibrary.import_pack(zip_bytes)
 	r.expect_true("알 수 없는 format_version이면 거부함", not result["ok"])
 
 
@@ -120,7 +120,7 @@ func _test_rejects_unsafe_paths(r) -> void:
 			"manifest.json": _valid_manifest_json(),
 			cases[description]: PackedByteArray([1, 2, 3]),
 		})
-		var result := CharacterLibrary.import_pack(zip_bytes)
+		var result := await CharacterLibrary.import_pack(zip_bytes)
 		r.expect_true("%s 경로가 있으면 거부함" % description, not result["ok"])
 
 
@@ -129,5 +129,5 @@ func _test_rejects_disallowed_extension(r) -> void:
 		"manifest.json": _valid_manifest_json(),
 		"malware.exe": PackedByteArray([1, 2, 3]),
 	})
-	var result := CharacterLibrary.import_pack(zip_bytes)
+	var result := await CharacterLibrary.import_pack(zip_bytes)
 	r.expect_true("화이트리스트에 없는 확장자가 있으면 거부함", not result["ok"])

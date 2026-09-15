@@ -147,13 +147,15 @@ JSON으로 봉투를 싸므로, 바이너리를 그 안에 넣으려면 Base64�
 | `hello` | `protocol_version: int` | 연결 직후 가장 먼저 보내야 하는 메시지(§2.0). |
 | `create_room` | `player_count: int (2~4)` | 새 방을 만든다. 만든 사람이 방의 0번 슬롯을 차지한다. |
 | `join_room` | `code: String, reconnect_token: String (선택)` | 기존 방에 들어간다. `reconnect_token`을 같이 보내고 그 방의 어느 슬롯이 발급했던 토큰과 정확히 일치하면 그 슬롯으로 복귀한다(§6). 없거나 안 맞으면 새 참가자로 취급. |
-| `select_character` | `meta: Dictionary { id: String, display_name: String }` | 로비에서 캐릭터(정확히는 캐릭터 메타 - v1은 이 두 필드뿐, §8 참고)를 고른다. 아무 때나 다시 불러 바꿀 수 있다(게임 시작 전까지). |
+| `select_character` | `meta: Dictionary { id: String, display_name: String, pack_hash: String }` | 로비에서 캐릭터(캐릭터 메타)를 고른다. 아무 때나 다시 불러 바꿀 수 있다(게임 시작 전까지). `pack_hash`는 2-5에서 추가된 선택 필드(sha256 hex 64자 또는 빈 문자열 - §8 참고). |
 | `ready` | `ready: bool` | 준비 완료/취소 토글. |
-| `set_player_count` | `player_count: int (2~4)` | 방장이 로비에서 인원수를 바꾼다(§9 결정 1과 달리 2-3에서 추가 - 이미 들어온 인원보다 낮출 수 없고, 로비 단계에서만 허용). |
+| `set_player_count` | `player_count: int (2~4)` | 방장이 로비에서 인원수를 바꾼다(§10 결정 1과 달리 2-3에서 추가 - 이미 들어온 인원보다 낮출 수 없고, 로비 단계에서만 허용). |
 | `request_roll` | (없음) | 주사위를 굴리고 싶다. |
 | `request_hold` | `index: int (0~4)` | 그 주사위의 고정 상태를 토글하고 싶다. |
 | `request_score` | `category: int (0~11)` | 그 칸에 확정하고 싶다. |
 | `leave` | (없음) | 방을 나간다. |
+| `request_character_pack` | `owner_index: int` | 2-5(§8) - `transferring` 단계에서 "그 슬롯의 캐릭터 팩이 필요하다"고 요청한다. 캐시에 이미 있으면 아예 안 보낸다. |
+| `upload_pack_chunk` | `hash: String, sequence: int, total_chunks: int, total_bytes: int, data: String(base64)` | 2-5(§8) - 지금 순번인 소유자가 자기 팩을 청크로 나눠 보낸다. |
 
 ### 2.2 서버 → 클라이언트
 
@@ -163,10 +165,10 @@ JSON으로 봉투를 싸므로, 바이너리를 그 안에 넣으려면 Base64�
 | `room_created` | `code: String, player_count: int, reconnect_token: String` | `create_room` 응답. `reconnect_token`은 이 접속(0번 슬롯) 전용이며 그 클라이언트에게만 보내진다. |
 | `room_joined` | `players: Array[{player_index:int, meta:Dictionary, ready:bool}], my_index: int, reconnect_token: String` | `join_room` 성공 응답 - 지금 방에 있는 전원 정보. `reconnect_token`은 이번에 새로 들어온 슬롯 전용(재접속으로 기존 슬롯을 되찾은 경우는 원래 발급됐던 토큰이 그대로 유효하므로 다시 안 줘도 됨). |
 | `player_joined` | `player_index: int, meta: Dictionary` | 로비에 있는 동안 다른 사람이 들어왔을 때, 이미 있던 사람들에게. |
-| `player_character` | `player_index: int, meta: Dictionary` | 누군가 `select_character`로 캐릭터를 바꿨을 때 전원에게. v1은 `meta`에 `display_name`만 실질적으로 채워진다(§8). |
+| `player_character` | `player_index: int, meta: Dictionary` | 누군가 `select_character`로 캐릭터를 바꿨을 때 전원에게. `meta`에는 `id`/`display_name`/`pack_hash`가 담긴다(`pack_hash`는 2-5, §8). |
 | `player_ready_changed` | `player_index: int, ready: bool` | 준비 상태가 바뀔 때 전원에게. |
 | `room_player_count_changed` | `player_count: int` | 방장이 `set_player_count`로 인원수를 바꿨을 때 전원에게(2-3에서 추가). |
-| `game_started` | `player_count: int` | 방이 다 찼고 전원 준비되어 게임이 시작됨(§3의 로비 상태 기계에서 `transferring`을 거친 뒤). 이 직후 첫 `state_snapshot`이 따라온다. **`game_state_started`(아래)와 다른 메시지다** - 이건 로비 종료를 알리는 것뿐이고, 실제 `GameState.start_turn()`의 결과는 스냅샷과 `game_state_started`로 따로 온다. |
+| `game_started` | `player_count: int` | 방이 다 찼고 전원 준비되어 게임이 시작됨(§3의 로비 상태 기계에서 `transferring`을 거친 뒤 - 2-5부터는 실제 캐릭터 팩 전송이 끝나거나 포기된 뒤). 이 직후 첫 `state_snapshot`이 따라온다. **`game_state_started`(아래)와 다른 메시지다** - 이건 로비 종료를 알리는 것뿐이고, 실제 `GameState.start_turn()`의 결과는 스냅샷과 `game_state_started`로 따로 온다. |
 | `state_snapshot` | §5 참고 | 지금 상태 전체. 서버 상태가 바뀔 때마다(요청 처리 결과) 방 전원에게. |
 | `dice_rolled` | `player_index:int, values:Array[int](5), rerolls_left:int` | 싱글플레이어의 `GameEvents.dice_rolled`와 동일 - SfxBank가 굴림 효과음에 쓴다. |
 | `die_held_changed` | `player_index:int, index:int, held:bool` | 주사위 고정/해제 - SfxBank가 홀드 효과음에 쓴다(2-4C에서 추가 - 처음엔 빠져 있어서 온라인에서 이 효과음만 안 났다). |
@@ -180,6 +182,10 @@ JSON으로 봉투를 싸므로, 바이너리를 그 안에 넣으려면 Base64�
 | `game_ended` | `winners:Array[int], scores:Array[int]` | 게임 종료 - 승/패 보이스 시퀀스 트리거. |
 | `game_state_started` | `player_count:int` | `GameState.start_turn()`이 내는 `GameEvents.game_started`를 실어 나른다(2-4C에서 추가). 위 `game_started`(로비 종료 알림)와 이름이 같으면 클라이언트가 게임 시작을 두 번 받게 되어 일부러 다른 이름을 썼다 - 로컬로 재방출할 때는 원래 이름(`GameEvents.game_started`)으로 되돌아간다. 지금은 구독하는 연출이 없다(1-4C 인사 연출은 이 메시지가 아니라 로비 `game_started` 수신 시점에 클라이언트가 직접 트리거함). |
 | `player_left` | `player_index: int, reason: String` | `reason`은 `"left"`(자기가 나감)/`"disconnected"`(연결 끊김, 재접속 유예 중)/`"timeout"`(유예 종료, 확정 이탈 - §6). `"disconnected"`와 `"timeout"`은 같은 플레이어에 대해 순서대로 두 번 올 수 있다 - 클라이언트는 `"timeout"`을 받으면 "자동 진행 중" 표시를 계속 띄운다. |
+| `transferring_started` | (없음) | 2-5(§8) - 로비가 다 찼고 `transferring` 단계에 들어감. 각 클라이언트는 이걸 받으면 자기 캐시를 확인해서 필요한 것만 `request_character_pack`을 보낸다. |
+| `pack_upload_requested` | `hash: String` | 2-5(§8) - 방 전체에 방송(특정 수신자에게만 보내지 않음). 그 해시의 소유자는 이걸 보고 업로드를 시작하고, 나머지는 "지금 누구 걸 기다리는지" UI를 갱신한다. |
+| `pack_chunk` | `hash: String, sequence: int, total_chunks: int, data: String(base64)` | 2-5(§8) - 그 해시를 요청한 클라이언트에게만. 서버는 전체 바이트를 버퍼링하지 않고 오는 즉시 그대로 릴레이한다. |
+| `pack_transfer_failed` | `hash: String, reason: String` | 2-5(§8) - 방 전체에 방송. `reason`은 `"timeout"`(60초 안에 소유자가 업로드를 못 끝냄) 또는 `"oversized"`(소유자가 보낸 `total_bytes`가 상한을 넘음). 이 해시를 기다리던 클라이언트는 조용히 기본 캐릭터로 대체한다. |
 | `player_reconnected` | `player_index: int` | 재접속 유예 중이던 플레이어가 돌아왔을 때 전원에게(§6). |
 | `error` | `code: String, message: String` | 요청이 거부됨(§7 참고). `code`는 프로그램이 분기하는 값(`NOT_YOUR_TURN`/`PROTOCOL_MISMATCH`/`NOT_HOST`/`NOT_IN_GAME`/`ROOM_NOT_FOUND`/`ROOM_FULL`/`GAME_ALREADY_STARTED`/`INVALID_ARGUMENT` 등, 정의는 `scripts/net/protocol.gd`), `message`는 사람이 읽는 설명. |
 
@@ -201,12 +207,12 @@ ended
 ```
 
 `transferring`은 전원이 준비된 뒤, 실제 게임이 시작되기 전에 서로의
-캐릭터 팩(§8)을 주고받는 단계로 자리를 미리 만들어둔다. **v1에서는 이
-단계에서 실제로 전송할 자산이 없으므로(캐릭터 메타에 `display_name`만
-있음) 진입하자마자 바로 통과한다** - 상태 기계 자체는 있지만 체감상
-`lobby`에서 곧장 `game_started`로 넘어가는 것처럼 보인다. 2-5에서 실제
-전송을 구현할 때 이 단계 안에서 진행률 메시지 등을 추가하면 되고, 로비
-쪽 상태 기계를 다시 설계할 필요는 없다.
+캐릭터 팩(§8)을 주고받는 단계다. 2-5에서 실제 전송을 구현했다 - 자세한
+내부 상태 기계(`COLLECTING` → `TRANSFERRING_PACK` → ... → `DONE`)와
+타임아웃/실패 처리는 §8 참고. 아무도 남에게 없는 팩을 안 갖고 있으면
+(전원이 내장 기본 캐릭터거나 서로 완전히 같은 캐릭터를 골랐으면) 큐가
+비어 즉시 통과한다 - v1 당시의 "체감상 바로 넘어감" 동작이 이 특수
+경우로 그대로 남아있다.
 
 ```mermaid
 sequenceDiagram
@@ -243,7 +249,7 @@ sequenceDiagram
 
     Note over S: 3번째 참가자가 join_room + select_character + ready 완료(생략)
 
-    Note over S: transferring - v1은 즉시 통과(§8)
+    Note over S: transferring - 캐릭터 팩 요청/전송(§8, 여기선 생략)
 
     S-->>A: game_started(3)
     S-->>B: game_started(3)
@@ -254,7 +260,7 @@ sequenceDiagram
 - 방은 `create_room`에서 정한 인원(2~4)이 **정확히 다 차고 전원이
   `ready(true)`일 때** 자동으로 시작된다. 방장이 인원을 못 채운 채로
   조기 시작하는 기능은 없다 — 필요하면 처음부터 더 적은 인원으로 방을
-  만들면 된다(설계를 단순하게 유지하기 위한 선택, §9 핵심 결정 참고).
+  만들면 된다(설계를 단순하게 유지하기 위한 선택, §10 핵심 결정 참고).
 - 로비 중 누가 나가면(`leave`) 그 슬롯이 비고 다른 사람이 채울 수 있다.
   방이 완전히 비면 서버가 방을 없앤다.
 - `player_index`는 입장 순서(0부터)로 고정된다. 게임이 시작된 뒤에는
@@ -451,60 +457,163 @@ WebSocket 레벨 ping/pong으로 15초간 무응답이면 끊긴 것으로 간�
 | 리롤을 다 썼는데 또 굴리기 요청 | `rolls_left > 0`을 서버가 검사(§4). |
 | 범위 밖 인덱스(`category=99`, `index=-1` 등) | 정수 범위 검사를 모든 진입점에서 통과 못 하면 `error(INVALID_ARGUMENT)`로 거부 - 원칙 6(외부 입력 신뢰 안 함)의 연장. |
 | 방을 만들 때 인원수를 5명 등으로 보냄 | `create_room`의 `player_count`가 2~4 범위인지 서버가 검사. |
-| 캐릭터 메타에 과도하게 긴 문자열/이상한 값 | `display_name` 길이 상한(예: 20자) 서버가 강제 - 이미지/보이스 파일 자체는 이번 범위에서 아예 전송하지 않으므로(§8) 1-7의 zip 검증 규칙이 여기선 적용될 일이 없다. |
+| 캐릭터 메타에 과도하게 긴 문자열/이상한 값 | `display_name`은 제어문자 제거 후 `MAX_DISPLAY_NAME_LENGTH`(12자)로 자른다. `pack_hash`는 64자 소문자 hex(또는 빈 문자열) 형식이 아니면 통째로 빈 문자열(팩 없음)로 대체한다(§8). |
+| 캐릭터 팩 안에 악성/비정상 파일(경로 탈출, 허용 안 된 확장자, 압축 폭탄) | 받은 팩은 1-7의 `CharacterLibrary.validate_and_extract_pack()`을 그대로 통과해야 한다(§8) - 실패하면 상대를 탓하는 메시지 없이 조용히 기본 캐릭터로 대체하고 로그만 남긴다. |
+| 소유자가 `total_bytes`를 실제보다 작게 보내고 더 많은 청크를 흘려보냄 | 서버는 매 청크마다 `total_bytes`를 상한과 비교하고, 마지막 청크 판정(`sequence == total_chunks-1`)이 어긋나면 그 전송은 그냥 진행이 멈춘 채로 타임아웃 처리된다 - 게임 시작 자체는 막히지 않는다(§8). |
 | 방 코드만 알고(토큰 없이/틀리게) 남의 슬롯에 재접속 시도 | `join_room`은 방 코드와 `reconnect_token`이 **둘 다** 그 슬롯 것과 일치해야만 기존 자리를 돌려준다(§6). 방 코드는 친구에게 알려주는 값이라 비밀이 아니므로, 토큰 없이는 무조건 새 참가자로만 취급된다. |
 | 클라이언트 버전이 서버와 달라 프로토콜을 벗어난 메시지를 보냄 | `hello`의 `protocol_version`이 안 맞으면 그 어떤 메시지도 처리하지 않고 연결을 바로 끊는다(§2.0) - 애매하게 진행하다 이상 동작하는 상황 자체를 안 만든다. |
 | 비정상적으로 큰 메시지를 보내 서버 메모리/파싱을 노림 | `MAX_MESSAGE_BYTES`(64KB)를 넘는 메시지는 내용을 읽지 않고 그 연결을 즉시 끊는다(§2.0). |
 | 같은 요청을 짧은 시간에 반복 스팸 | 대부분은 상태 검사 자체가 멱등적이라 자연히 막힌다(예: 리롤 소진 후 반복 요청은 매번 `error`). 다만 방 생성/입장처럼 상태가 없는 요청은 별도로 초당 요청 수를 제한하는 게 안전하다 - 이번 문서에서는 "필요하다"는 것만 표시해두고 구체적인 상한은 구현 시점에 정한다. |
 
-## 8. 이 문서에서 다루지 않은 것(범위 밖)
+## 8. 캐릭터 팩 실시간 전송 (2-5)
 
-- **캐릭터 이미지/보이스의 실시간 동기화(2-5에서 구현).** `select_character`/
-  `player_character`의 `meta`는 **v1에서는 `id`/`display_name`만
-  의미 있게 채워진다** — 초상화나 목소리 파일 자체를 네트워크로 보내지
-  않는다. 즉 v1에서는 **다른 플레이어의 커스텀 그림/목소리가 내
-  화면에는 안 보이고 안 들린다**(이름표만 보임). 다만 로비 상태
-  기계(§3)에 `transferring` 단계를 이미 만들어뒀으므로, 나중에 실제
-  전송을 넣을 때 로비 흐름 자체를 다시 설계할 필요는 없다 - `transferring`
-  단계 안에서 진행률 메시지 등만 추가하면 된다.
+`select_character`/`player_character`의 `meta`에 `pack_hash: String`
+(sha256 hex 64자, 팩이 없으면 빈 문자열)이 추가됐다. 캐릭터를 고른
+클라이언트는 그 자리에서 1-7의 `export_pack_bytes()`로 zip을 만들어
+해시를 미리 계산해두고, 실제 업로드 요청이 오면 재압축 없이 그 바이트를
+그대로 쓴다.
 
-  전송 포맷은 1-7에서 이미 만든 캐릭터 팩(`.ydchar.zip`)을 그대로 쓴다 -
-  manifest 스키마, 경로/확장자 검증, 압축 해제 크기 상한이 이미 있어서
-  "남이 보낸 파일을 신뢰하지 않는다"는 요구사항(원칙 6)을 다시 설계할
-  필요가 없다.
+### 8.1 왜 해시만 먼저 보내는가
 
-  **청크 크기와 `MAX_MESSAGE_BYTES`(64KB)는 같은 값이면 안 된다.** 이
-  메시지들은 JSON 봉투에 담기고, 바이너리(zip 조각)는 Base64로 인코딩해서
-  문자열로 넣는다 - Base64는 원본을 약 1.33배로 불린다. 청크의 원본
-  페이로드를 64KB로 잡으면 인코딩 후 약 87KB가 되고, 여기에 타입/순번/총
-  개수 같은 봉투 필드까지 더하면 `MAX_MESSAGE_BYTES`를 넘어서 **첫 청크부터
-  서버가 거부한다.** 그래서:
-  - 청크 페이로드(인코딩 전 원본)는 `CHUNK_PAYLOAD_BYTES := 32768`(32KB)로
-    잡는다. Base64 후 약 43KB - 봉투를 더해도 64KB 안에 넉넉히 들어온다.
-  - §2.0의 규칙(청크는 Base64+봉투를 더해도 `MAX_MESSAGE_BYTES`를 넘지
-    않아야 함)을 그대로 따른 결과가 이 32KB다. 나중에 `MAX_MESSAGE_BYTES`를
-    바꾸면 `CHUNK_PAYLOAD_BYTES`도 같이 재계산해야 한다.
+- **캐시 재사용.** 클라이언트는 `user://cache/received/<해시>/`(§8.4)에
+  그 해시가 이미 있으면 아예 요청을 안 보낸다 - 재접속해도, 같은 상대와
+  다시 만나도 다시 안 받는다.
+- **중복 제거.** 여러 명이 같은 캐릭터를 고르면 해시가 같으므로, 방
+  전체에서 그 해시는 (가장 낮은 슬롯 인덱스인) 대표 소유자 한 명에게서
+  한 번만 받는다(`Room.compute_needed_hashes()`).
 
-  1-7B에서 정한 업로드 권장 상한(스탠딩 4MB / 썸네일 1MB / 보이스 1MB /
-  **캐릭터 전체 합계 권장 10MB, 경고 15MB**)은 원래 "캐릭터 팩을 언젠가
-  네트워크로 보낼 것"을 염두에 두고 잡은 값이었는데, 위 Base64 오버헤드를
-  반영해서 실제 전송량을 다시 계산하면 그 이유가 더 뚜렷해진다: 15MB짜리
-  팩은 Base64 인코딩 후 **약 20MB**가 실제로 오간다(15MB × 4/3). 이걸
-  3명(4인 방 기준 나머지 전원)에게 나눠줘야 하면 업로더 쪽 체감 전송량은
-  **약 60MB**로 불어난다(20MB × 3명). 업로드 권장 상한을 낮게 잡아둔 게
-  단순히 "브라우저 저장 공간 절약"뿐 아니라 "이 팩을 언젠가 네트워크로,
-  그것도 Base64로 부풀려서 여러 명에게 실어 나를 때의 비용"까지 미리
-  대비한 선택이었다는 뜻이다.
+### 8.2 서버 쪽 전송 스케줄러 (`Room.TransferState`)
 
-  > **각주 - 대안(지금은 채택 안 함)**: WebSocket은 텍스트 프레임 대신
-  > 바이너리 프레임(`write_mode = WRITE_MODE_BINARY`)도 지원한다. 이걸
-  > 쓰면 Base64 인코딩 자체가 필요 없어져서 위 1.33배 오버헤드가 통째로
-  > 사라진다. 다만 그러려면 캐릭터 팩 청크만 별도의 바이너리 메시지
-  > 경로로 처리해야 해서(지금 설계는 모든 메시지가 JSON 텍스트 프레임
-  > 하나의 경로만 탄다), RoomManager의 메시지 처리 흐름이 텍스트/바이너리
-  > 두 갈래로 갈라져 2-3(방 관리)·2-4(턴 처리) 구현이 복잡해진다. 지금은
-  > 채택하지 않는다 - 2-5에서 실제로 전송 속도가 문제가 되면 그때 검토할
-  > 선택지로만 남겨둔다.
+방장/전원 준비가 끝나면 로비는 `TRANSFERRING`으로 들어가고
+(`transferring_started` 방송), 짧은 수집 창(`TRANSFER_COLLECT_MSEC`,
+1초) 동안 `request_character_pack`을 모은다. 창이 닫히면 실제로 요청이
+들어온 해시만 큐에 올리고, **한 번에 해시 하나씩만** 순서대로 처리한다
+(`COLLECTING` → `TRANSFERRING_PACK` × N → `DONE`). 서로 다른 소유자의
+업로드가 동시에 진행되지 않는 대가가 있지만, 한 방에 최대 3개 해시뿐이라
+순서대로 처리해도 감당할 만하다고 보고 이렇게 단순화했다 - 이 스케줄러
+설계 덕분에 "한 클라이언트가 동시에 두 개를 받지 않는다"는 요구사항이
+클라이언트 쪽에 별도 로직 없이 저절로 만족된다.
+
+`pack_upload_requested(hash)`는 방 전체에 방송한다(요청자에게만 보내지
+않음) - 소유자는 이걸 보고 업로드를 시작하고, 나머지 전원은 "지금 누구를
+기다리는지" UI를 이 메시지 하나로 갱신할 수 있다.
+
+### 8.3 전송이 막혔을 때 (로비가 영원히 멈추면 안 됨)
+
+- 진행 중인 전송이 `PACK_TRANSFER_TIMEOUT_MSEC`(60초)를 넘기면 서버는
+  그 해시를 포기하고 `pack_transfer_failed(hash, reason="timeout")`을
+  방송한 뒤 다음 해시로 넘어간다.
+- 소유자가 보낸 `total_bytes`가 상한(`CharacterLimits.TOTAL_WARNING_BYTES`,
+  15MB - 1-7B가 편집 화면에서 이미 안내하는 값과 **같은 상수**)을 넘으면
+  첫 청크 시점에 바로 `reason="oversized"`로 포기한다. 청크 개수만 믿지
+  않고 매 청크마다 검사한다.
+- 큐가 다 처리되면(성공/실패 무관) `_finish_transferring()`이 항상
+  `game_started`를 보내고 `game_state.start_turn()`을 호출한다 - 어떤
+  전송이 실패해도 게임 자체가 시작 안 되는 경우는 없다.
+- 20MB(위 15MB의 Base64 인코딩 후 크기)는 **상한이 아니라 파생값**이다 -
+  실제 비교는 항상 원본(전송 전) 바이트 수 vs 15MB로 한다. 두 값이
+  같은 상수(`CharacterLimits.TOTAL_WARNING_BYTES`)에서 나오므로 편집
+  화면의 안내 문구와 실제 상한이 어긋날 일이 없다.
+
+### 8.4 받은 팩 처리 (예외 없음, 원칙 6)
+
+받은 zip은 1-7의 검증(`CharacterLibrary.validate_and_extract_pack()` -
+manifest 스키마, 경로 탈출, 확장자 화이트리스트, 해제 크기 상한)을
+그대로 통과해야 한다. 게다가 청크를 다 받은 클라이언트는 재조립한
+바이트의 sha256을 직접 계산해서 요청했던 해시와 대조한다(서버는 전체
+바이트를 버퍼링하지 않고 오는 즉시 그대로 릴레이만 하므로, 무결성 검증은
+받는 쪽의 몫이다). 검증/해시 대조 중 하나라도 실패하면 **상대를 탓하는
+메시지 없이** 로그만 남기고 조용히 기본 캐릭터로 대체한다.
+
+통과한 팩은 `user://cache/received/<해시>/`에 푼다 - `user://characters/`
+(내 캐릭터 목록)와 완전히 분리된 자리라 남의 캐릭터가 내 목록에 섞이지
+않는다. 이 캐시는 `ReceivedPackCache.MAX_CACHE_BYTES`(60MB, 15MB × 4)
+상한을 넘으면 `manifest.json` 수정 시각이 가장 오래된 것부터 지운다.
+
+디스크 쓰기 자체가 실패하면(시크릿 모드 등 저장이 막힌 환경)
+`CharacterProfile.asset_bytes`(파일명 → 바이트, 런타임 전용 필드)에 담아
+그 판 한정으로 메모리에서만 쓴다 - `AssetLoader.load_texture_from_bytes()`/
+`load_audio_from_bytes()`가 원래 경로 없이 순수 바이트만 받는 구조라 새
+디코딩 경로가 필요 없었다. 다음 판에는 다시 받게 되지만, 안 보이는
+것보다는 낫다는 판단이다.
+
+### 8.5 청크 크기와 `MAX_MESSAGE_BYTES`
+
+**청크 크기와 `MAX_MESSAGE_BYTES`(64KB)는 같은 값이면 안 된다.** 이
+메시지들은 JSON 봉투에 담기고, 바이너리(zip 조각)는 Base64로 인코딩해서
+문자열로 넣는다 - Base64는 원본을 약 1.33배로 불린다. 청크의 원본
+페이로드를 64KB로 잡으면 인코딩 후 약 87KB가 되고, 여기에 타입/순번/총
+개수 같은 봉투 필드까지 더하면 `MAX_MESSAGE_BYTES`를 넘어서 **첫 청크부터
+서버가 거부한다.** 그래서:
+- 청크 페이로드(인코딩 전 원본)는 `NetProtocol.CHUNK_PAYLOAD_BYTES := 32768`
+  (32KB)로 잡는다. Base64 후 약 43KB - 봉투를 더해도 64KB 안에 넉넉히
+  들어온다.
+- §2.0의 규칙(청크는 Base64+봉투를 더해도 `MAX_MESSAGE_BYTES`를 넘지
+  않아야 함)을 그대로 따른 결과가 이 32KB다. 나중에 `MAX_MESSAGE_BYTES`를
+  바꾸면 `CHUNK_PAYLOAD_BYTES`도 같이 재계산해야 한다.
+
+15MB짜리 팩은 Base64 인코딩 후 **약 20MB**가 실제로 오간다(15MB × 4/3).
+이걸 3명(4인 방 기준 나머지 전원)에게 나눠줘야 하면 업로더 쪽 체감
+전송량은 **약 60MB**로 불어난다(20MB × 3명). 1-7B의 업로드 권장 상한이
+이 비용까지 미리 대비한 선택이었다는 뜻이다.
+
+> **각주 - 대안(지금은 채택 안 함)**: WebSocket은 텍스트 프레임 대신
+> 바이너리 프레임(`write_mode = WRITE_MODE_BINARY`)도 지원한다. 이걸
+> 쓰면 Base64 인코딩 자체가 필요 없어져서 위 1.33배 오버헤드가 통째로
+> 사라진다. 다만 그러려면 캐릭터 팩 청크만 별도의 바이너리 메시지
+> 경로로 처리해야 해서(지금 설계는 모든 메시지가 JSON 텍스트 프레임
+> 하나의 경로만 탄다), RoomManager의 메시지 처리 흐름이 텍스트/바이너리
+> 두 갈래로 갈라져야 한다. 채택하지 않았다 - 최대 3개 해시, 32KB 청크
+> 수준에서는 실제로 전송 속도가 문제되지 않았다.
+
+### 8.5-1 실제로 겪은 버그 — 청크가 하나만 나가고 멈춤(WebSocket 보내기 대기열)
+
+2-5를 처음 구현했을 때 실제 클라이언트로 테스트하니 전송이 항상 극초반
+(전체의 2%, 즉 청크 1개 분량)에서 멈추는 문제가 있었다. 원인은
+`WebSocketMultiplayerPeer`/`WebSocketPeer`의 `outbound_buffer_size`
+기본값이 **65535바이트**뿐이라는 것 - 직접 확인함(`ClassDB`로 기본값
+조회). 32KB 청크는 Base64 후 약 43KB인데, `_upload_my_pack()`이 모든
+청크를 한 함수 호출 안에서 연달아 `put_packet()`으로 내보내다 보니
+같은 프레임 안에서 대기열이 금방 65535바이트를 넘겼다. 이때
+`put_packet()`은 크래시하지 않고 `ERR_OUT_OF_MEMORY`만 조용히 돌려주는데,
+그 반환값을 확인하지 않고 있어서 두 번째 청크부터 그냥 사라졌다 -
+받는 쪽은 첫 청크 이후 영원히 다음 청크를 못 받고 결국 60초 타임아웃으로
+정리됐다.
+
+**수정**: `GameClient`(클라이언트)와 `server_main.gd`(서버) 양쪽의
+`_send()`를 보내기 큐를 거치도록 바꿨다 - 큐가 비어있으면 즉시
+`put_packet()`을 시도하고(일반 메시지는 지연 없음), 실패(`!= OK`)하면
+버리지 않고 큐 뒤에 남겨뒀다가 매 프레임(`_process()`에서 `poll()` 직후)
+큐 앞부터 다시 시도한다. `poll()`이 매 프레임 실제 소켓으로 데이터를
+흘려보내 대기열을 비워주므로, 결국 모든 청크가 순서대로 다 나간다.
+서버는 접속(peer_id)마다 별도 큐를 둬서 한 명에게 밀린 전송이 다른
+사람에게 영향을 안 주게 했다.
+
+**재현/검증 방법**: 실제 소켓으로, 압축이 안 되는 무작위 바이트로 만든
+400KB 팩(청크 13개)을 전송해봤다. 수정 전 코드로는 실제로
+`ERR_OUT_OF_MEMORY`가 여러 번 발생하며 청크가 중간에 사라지는 것을
+엔진 에러 로그로 직접 확인했고, 수정 후에는(같은 `ERR_OUT_OF_MEMORY`가
+여전히 몇 번 나지만) 큐가 재시도해서 13개 전부 정상 도착 - 캐시에 저장된
+파일 크기가 원본과 정확히 일치함을 확인했다.
+
+**진단 로그**: 이 버그를 다시 만나면 바로 알 수 있도록 로그를 남겨뒀다 -
+서버 콘솔(`[서버][전송]`, headless 네이티브 프로세스라 항상 보임)에
+청크 수신/릴레이/대기열 적체를, 클라이언트는 화면(`online_screen.tscn`의
+`TransferDebugLog`, `BuildInfo.DEBUG_MODE`일 때만 보임 - 브라우저
+콘솔의 print()를 못 믿는다는 1-5의 교훈 그대로 적용)에 청크 송수신과
+"보내기 대기열 N개"를 남긴다. `PackTransferClient.get_status_text()`도
+"타임아웃까지 N초" 카운트다운을 보여준다.
+
+### 8.6 웹에서 화면이 안 멈추게
+
+받는 쪽의 압축 해제(`validate_and_extract_pack()`)는 파일을 하나 풀 때마다
+`await get_tree().process_frame`으로 한 프레임 쉰다(선택적 `yield_node`
+인자 - 로컬 가져오기는 단발성 사용자 동작이라 안 넘기고, 2-5의 수신
+경로만 넘긴다). 서버가 해시를 하나씩만 순서대로 보내주므로 이 처리도
+자연히 한 번에 팩 하나씩만 일어난다.
+
+## 9. 이 문서에서 다루지 않은 것(범위 밖)
+
 - 매치메이킹/공개방 목록(방은 항상 코드를 아는 사람만 들어옴).
   회원가입/로그인 같은 계정 시스템.
 - 관전(스펙테이터) 모드.
@@ -514,14 +623,15 @@ WebSocket 레벨 ping/pong으로 15초간 무응답이면 끊긴 것으로 간�
 - 재접속 시 클라이언트 UI가 정확히 어떤 화면(로비/게임 중)을 보여줄지의
   세부 흐름.
 
-## 9. 확정된 핵심 결정 4가지 (검토 완료)
+## 10. 확정된 핵심 결정 4가지 (검토 완료)
 
 1. **방 인원은 생성 시점에 고정, 자동 시작만 있음.** `create_room(player_count)`로
    정한 인원이 정확히 다 차고 전원 준비되면 자동 시작된다. 방장이
    모자란 인원으로 조기 시작하는 기능은 없음 — 필요하면 알려달라.
-2. **캐릭터 이미지/보이스는 v1에서 아예 동기화 안 함.** 다른 플레이어는
-   이름만 보인다(§8). 이 결정이 마음에 안 들면 처음부터 캐릭터 팩 전송을
-   설계에 넣어야 해서 지금 정해두는 게 좋다.
+2. **캐릭터 이미지/보이스는 2-5부터 실시간 동기화된다(§8).** v1(2-3)
+   당시에는 다른 플레이어가 이름만 보였지만, 이제는 캐릭터 팩이 실제로
+   전송되어 초상/보이스까지 보이고 들린다. 실패(타임아웃/초과 크기/검증
+   실패) 시에만 기본 캐릭터로 대체된다.
 3. **전체 스냅샷 방식 확정, 델타 동기화 없음(§5).** 상태가 작고 전송이
    TCP라는 근거로 결론 냈다 - 동의하는지 확인 부탁.
 4. **연결 끊김 = 슬롯 유지 + AFK 자동 진행, 인원수는 게임 끝까지 안 바뀜(§6).**

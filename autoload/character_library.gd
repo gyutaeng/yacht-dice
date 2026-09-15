@@ -34,13 +34,23 @@ const CharacterLimitsScript = preload("res://scripts/characters/character_limits
 ##   바이트 기반 시그니처 판별로 읽어야 한다(확장자를 안 믿음, 원칙 3·6).
 ## 이 둘을 헷갈리면 안 되므로 "어느 쪽 파일을 읽을지" 자체를 함수 호출부가
 ## 신경 쓰지 않도록 profile.is_builtin으로 여기서 한 번에 분기한다.
+##
+## 2-5에서 asset_bytes/asset_base_dir 두 분기가 추가됐다(순서: is_builtin ->
+## asset_bytes -> asset_base_dir -> 기본 user://characters/<id>) - 온라인으로
+## 받은 캐릭터(CharacterProfile)를 표현하는 값들이라, VoiceBank/CharacterPortrait/
+## voice_mapping_panel.gd 세 호출부는 이 분기 확장만으로 그대로 동작한다.
 func load_profile_texture(profile: CharacterProfile, filename: String) -> Texture2D:
 	if profile == null or filename.is_empty():
 		return null
 	if profile.is_builtin:
 		var path := BUILTIN_FALLBACK_PATH.path_join(filename)
 		return load(path) if ResourceLoader.exists(path) else null
-	return AssetLoader.load_texture_from_path(CHARACTERS_DIR.path_join(profile.id).path_join(filename))
+	if not profile.asset_bytes.is_empty():
+		if not profile.asset_bytes.has(filename):
+			return null
+		return AssetLoader.load_texture_from_bytes(profile.asset_bytes[filename])
+	var base_dir := profile.asset_base_dir if profile.asset_base_dir != "" else CHARACTERS_DIR.path_join(profile.id)
+	return AssetLoader.load_texture_from_path(base_dir.path_join(filename))
 
 
 func load_profile_audio(profile: CharacterProfile, filename: String) -> AudioStream:
@@ -49,7 +59,12 @@ func load_profile_audio(profile: CharacterProfile, filename: String) -> AudioStr
 	if profile.is_builtin:
 		var path := BUILTIN_FALLBACK_PATH.path_join(filename)
 		return load(path) if ResourceLoader.exists(path) else null
-	return AssetLoader.load_audio_from_path(CHARACTERS_DIR.path_join(profile.id).path_join(filename))
+	if not profile.asset_bytes.is_empty():
+		if not profile.asset_bytes.has(filename):
+			return null
+		return AssetLoader.load_audio_from_bytes(profile.asset_bytes[filename])
+	var base_dir := profile.asset_base_dir if profile.asset_base_dir != "" else CHARACTERS_DIR.path_join(profile.id)
+	return AssetLoader.load_audio_from_path(base_dir.path_join(filename))
 
 
 ## user://characters/ 아래의 "사용자" 캐릭터만 반환한다. 내장 기본 캐릭터는
@@ -288,9 +303,10 @@ func _zip_write_entry(packer: ZIPPacker, entry_name: String, bytes: PackedByteAr
 	packer.close_file()
 
 
-## 남이 만든 zip 파일을 여는 기능이므로 내용을 전혀 신뢰하지 않는다(원칙 6).
-## 아래를 전부 통과해야만 디스크에 한 바이트라도 쓴다 - 하나라도 걸리면
-## 무엇도 기록하지 않고 실패 이유를 한국어 문자열로 돌려준다:
+## zip 바이트를 검증하고 메모리로만 풀어낸다(디스크에 아무것도 안 씀) -
+## 로컬 가져오기(import_pack)와 2-5(네트워크로 받은 캐릭터 팩)가 이 신뢰
+## 검증 로직을 공유한다. 남이 만든 파일이므로 내용을 전혀 신뢰하지
+## 않는다(원칙 6) - 아래를 전부 통과해야만 "ok": true를 돌려준다:
 ## - manifest.json이 있고 CharacterProfile 스키마를 통과해야 한다.
 ## - 모든 항목의 경로가 안전해야 한다(".."/절대경로/백슬래시 금지 - zip slip 방지).
 ## - 모든 항목의 확장자가 화이트리스트 안에 있어야 한다.
@@ -300,29 +316,36 @@ func _zip_write_entry(packer: ZIPPacker, entry_name: String, bytes: PackedByteAr
 ##   그 한 번의 read_file() 호출 자체가 메모리를 크게 잡을 수 있다는 한계는
 ##   있지만, "여러 항목의 합이 상한을 넘는" 흔한 폭탄은 디스크에 쓰기 전에 막는다.)
 ##
-## id는 항상 새로 발급한다 - 기존 캐릭터를 덮어쓰지 않는다. 반환값:
-## {"ok": bool, "error": String, "profile": CharacterProfile}(실패 시 profile은 null).
-func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
+## yield_node를 넘기면 파일을 하나 풀 때마다 한 프레임 기다린다(2-5 - 온라인
+## 에서 최대 3명분 팩을 받을 때 압축 해제+디코딩이 한 프레임에 몰려 웹
+## 브라우저가 얼어붙는 걸 막기 위함, 1-8에서 지적된 문제의 연장). 로컬
+## 가져오기는 파일 하나를 사용자가 직접 고른 단발성 동작이라 넘기지 않는다.
+## 이 함수는 await를 포함하므로 항상 `await`로 호출해야 한다(GDScript는
+## yield_node가 null이라 실제로 한 번도 안 멈추는 경우에도 정적으로 요구한다).
+##
+## 반환값: {"ok": bool, "error": String, "manifest_profile": CharacterProfile,
+## "extracted": Dictionary(프로필 폴더 기준 상대경로 -> PackedByteArray)}.
+func validate_and_extract_pack(zip_bytes: PackedByteArray, yield_node: Node = null) -> Dictionary:
 	if zip_bytes.is_empty():
-		return _import_error("빈 파일입니다.")
+		return _extract_error("빈 파일입니다.")
 
 	var tmp_path := "user://.tmp_import_%d.zip" % Time.get_ticks_usec()
 	var tmp_file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if tmp_file == null:
-		return _import_error("임시 파일을 만들 수 없습니다.")
+		return _extract_error("임시 파일을 만들 수 없습니다.")
 	tmp_file.store_buffer(zip_bytes)
 	tmp_file.close()
 
 	var reader := ZIPReader.new()
 	if reader.open(tmp_path) != OK:
 		DirAccess.remove_absolute(tmp_path)
-		return _import_error("zip 파일을 열 수 없습니다. 손상되었거나 zip 형식이 아닙니다.")
+		return _extract_error("zip 파일을 열 수 없습니다. 손상되었거나 zip 형식이 아닙니다.")
 
 	var entries := reader.get_files()
 	if not entries.has(MANIFEST_FILENAME):
 		reader.close()
 		DirAccess.remove_absolute(tmp_path)
-		return _import_error("manifest.json이 없습니다. 캐릭터 팩(.ydchar.zip) 파일이 맞는지 확인하세요.")
+		return _extract_error("manifest.json이 없습니다. 캐릭터 팩(.ydchar.zip) 파일이 맞는지 확인하세요.")
 
 	var file_entries: Array[String] = []
 	for entry_path in entries:
@@ -331,12 +354,12 @@ func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
 		if not _is_safe_pack_path(entry_path):
 			reader.close()
 			DirAccess.remove_absolute(tmp_path)
-			return _import_error("안전하지 않은 경로가 들어 있어 거부합니다: \"%s\"" % entry_path)
+			return _extract_error("안전하지 않은 경로가 들어 있어 거부합니다: \"%s\"" % entry_path)
 		var ext := entry_path.get_extension().to_lower()
 		if not PACK_ALLOWED_EXTENSIONS.has(ext):
 			reader.close()
 			DirAccess.remove_absolute(tmp_path)
-			return _import_error("허용되지 않는 파일 형식이 들어 있어 거부합니다: \"%s\"" % entry_path)
+			return _extract_error("허용되지 않는 파일 형식이 들어 있어 거부합니다: \"%s\"" % entry_path)
 		file_entries.append(entry_path)
 
 	var manifest_bytes := reader.read_file(MANIFEST_FILENAME)
@@ -344,13 +367,13 @@ func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
 	if not (parsed is Dictionary):
 		reader.close()
 		DirAccess.remove_absolute(tmp_path)
-		return _import_error("manifest.json이 올바른 JSON 형식이 아닙니다.")
+		return _extract_error("manifest.json이 올바른 JSON 형식이 아닙니다.")
 
 	var manifest_profile := CharacterProfileScript.from_dict(parsed, "가져온 팩")
 	if manifest_profile == null:
 		reader.close()
 		DirAccess.remove_absolute(tmp_path)
-		return _import_error("manifest.json의 형식이 올바르지 않습니다(버전 또는 필드 오류).")
+		return _extract_error("manifest.json의 형식이 올바르지 않습니다(버전 또는 필드 오류).")
 
 	var extracted: Dictionary = {}  # 프로필 폴더 기준 상대경로 -> PackedByteArray
 	var total_bytes := manifest_bytes.size()
@@ -362,13 +385,35 @@ func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
 		if total_bytes > PACK_MAX_UNCOMPRESSED_BYTES:
 			reader.close()
 			DirAccess.remove_absolute(tmp_path)
-			return _import_error("압축을 풀었을 때 크기가 50MB를 넘어 거부합니다.")
+			return _extract_error("압축을 풀었을 때 크기가 50MB를 넘어 거부합니다.")
 		extracted[entry_path] = bytes
+		if yield_node != null:
+			await yield_node.get_tree().process_frame
 
 	reader.close()
 	DirAccess.remove_absolute(tmp_path)
 
 	_drop_missing_references(manifest_profile, extracted)
+	return {"ok": true, "error": "", "manifest_profile": manifest_profile, "extracted": extracted}
+
+
+func _extract_error(message: String) -> Dictionary:
+	push_warning("CharacterLibrary.validate_and_extract_pack: %s" % message)
+	return {"ok": false, "error": message, "manifest_profile": null, "extracted": {}}
+
+
+## 남이 만든 zip 파일을 여는 기능이므로 내용을 전혀 신뢰하지 않는다(원칙 6) -
+## 실제 검증은 validate_and_extract_pack()이 하고, 여기서는 그 결과를 디스크에
+## 쓰는 것만 담당한다. id는 항상 새로 발급한다 - 기존 캐릭터를 덮어쓰지
+## 않는다. 반환값: {"ok": bool, "error": String, "profile": CharacterProfile}
+## (실패 시 profile은 null).
+func import_pack(zip_bytes: PackedByteArray) -> Dictionary:
+	var validated := await validate_and_extract_pack(zip_bytes)
+	if not validated["ok"]:
+		return {"ok": false, "error": validated["error"], "profile": null}
+
+	var manifest_profile: CharacterProfile = validated["manifest_profile"]
+	var extracted: Dictionary = validated["extracted"]
 
 	var new_id := _generate_unique_id(manifest_profile.id)
 	var dest_dir := CHARACTERS_DIR.path_join(new_id)

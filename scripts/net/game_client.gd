@@ -45,11 +45,28 @@ signal game_ended(winners: Array[int], scores: Array[int])
 ## 시그널 이름 자체를 다르게 뒀다.
 signal game_state_started(player_count: int)
 
+# 2-5(캐릭터 팩 전송) §2단계.
+signal transferring_started()
+signal pack_upload_requested(hash: String)
+signal pack_chunk_received(hash: String, sequence: int, total_chunks: int, data_base64: String)
+signal pack_transfer_failed(hash: String, reason: String)
+
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
 var _peer := WebSocketMultiplayerPeer.new()
 var _state: State = State.IDLE
 var _ever_connected := false
+
+# 2-5 전송 버그 수정 - WebSocketMultiplayerPeer의 기본 outbound_buffer_size는
+# 65535바이트(직접 확인함)뿐이라, 32KB 청크를 Base64로 감싼 약 43KB짜리
+# 메시지 두 개만 같은 프레임에 연달아 보내도 버퍼가 넘친다. put_packet()은
+# 이때 크래시하지 않고 조용히 에러 코드만 돌려주는데, 그 반환값을 확인하지
+# 않으면 두 번째 청크부터 통째로 사라진다("전체의 2%(청크 1개)에서 멈춘다"는
+# 증상의 직접 원인). 그래서 모든 전송을 이 큐를 거치게 하고, 실패하면
+# 버리지 않고 다음 프레임에 다시 시도한다 - poll()이 매 프레임 버퍼를
+# 비워주므로 결국은 다 나간다. 순서 보장을 위해 큐가 비어있을 때만 즉시
+# 전송을 시도하고, 그 외엔 항상 큐 맨 뒤에 붙인다(먼저 넣은 게 항상 먼저 나감).
+var _outgoing_queue: Array[PackedByteArray] = []
 
 # PROTOCOL_MISMATCH를 받으면 서버가 곧바로 연결을 끊는다(§2.0) - 그 직후의
 # 일반적인 disconnected 신호까지 같이 쏘면 UI가 "게임 버전이 다릅니다"
@@ -63,6 +80,7 @@ func _process(_delta: float) -> void:
 		return
 
 	_peer.poll()
+	_flush_outgoing_queue()
 	var status := _peer.get_connection_status()
 
 	if status == MultiplayerPeer.CONNECTION_CONNECTED and _state == State.CONNECTING:
@@ -131,6 +149,14 @@ func request_score(category: int) -> void:
 	_send(NetProtocol.MSG_REQUEST_SCORE, {"category": category})
 
 
+func request_character_pack(owner_index: int) -> void:
+	_send(NetProtocol.MSG_REQUEST_CHARACTER_PACK, {"owner_index": owner_index})
+
+
+func upload_pack_chunk(hash: String, sequence: int, total_chunks: int, total_bytes: int, data_base64: String) -> void:
+	_send(NetProtocol.MSG_UPLOAD_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "total_bytes": total_bytes, "data": data_base64})
+
+
 func close() -> void:
 	_reset()
 
@@ -141,12 +167,33 @@ func _reset() -> void:
 	_state = State.IDLE
 	_ever_connected = false
 	_suppress_next_disconnect = false
+	_outgoing_queue.clear()
+
+
+## 지금 보내기 대기 중인 메시지 수 - 진단 로그용(PackTransferClient가
+## "청크 N을 대기열에 넣음" 같은 문구를 만들 때 참고).
+func get_outgoing_queue_size() -> int:
+	return _outgoing_queue.size()
 
 
 func _send(type: String, payload: Dictionary) -> void:
 	if _state == State.IDLE or _state == State.CONNECTING:
 		return
-	_peer.put_packet(NetProtocol.encode(type, payload))
+
+	var bytes := NetProtocol.encode(type, payload)
+	if not _outgoing_queue.is_empty():
+		_outgoing_queue.append(bytes)
+		return
+
+	if _peer.put_packet(bytes) != OK:
+		_outgoing_queue.append(bytes)
+
+
+func _flush_outgoing_queue() -> void:
+	while not _outgoing_queue.is_empty():
+		if _peer.put_packet(_outgoing_queue[0]) != OK:
+			break
+		_outgoing_queue.pop_front()
 
 
 ## GameEvents의 dice_rolled/game_ended는 Array[int]로 타입이 고정돼 있어서
@@ -211,6 +258,14 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 			game_ended.emit(_to_int_array(payload.get("winners", [])), _to_int_array(payload.get("scores", [])))
 		NetProtocol.MSG_GAME_STATE_STARTED:
 			game_state_started.emit(int(payload.get("player_count", 0)))
+		NetProtocol.MSG_TRANSFERRING_STARTED:
+			transferring_started.emit()
+		NetProtocol.MSG_PACK_UPLOAD_REQUESTED:
+			pack_upload_requested.emit(str(payload.get("hash", "")))
+		NetProtocol.MSG_PACK_CHUNK:
+			pack_chunk_received.emit(str(payload.get("hash", "")), int(payload.get("sequence", -1)), int(payload.get("total_chunks", 0)), str(payload.get("data", "")))
+		NetProtocol.MSG_PACK_TRANSFER_FAILED:
+			pack_transfer_failed.emit(str(payload.get("hash", "")), str(payload.get("reason", "")))
 		NetProtocol.MSG_ERROR:
 			var code := str(payload.get("code", ""))
 			if code == NetProtocol.ERROR_PROTOCOL_MISMATCH:

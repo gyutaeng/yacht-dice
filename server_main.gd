@@ -20,12 +20,26 @@ extends Node
 const DEFAULT_PORT := 8910
 const PORT_ENV_VAR := "YACHT_DICE_PORT"
 
+# 2-5(캐릭터 팩 전송) §2단계. 수집 창은 짧게(전원의 select_character가 이미
+# 로비 단계에서 다 도착해 있으므로 request_character_pack은 거의 동시에
+# 옴 - 네트워크 왕복 여유만 주면 됨). 타임아웃(NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC,
+# 60초)을 넘기면 그 사람 캐릭터는 포기하고 기본 캐릭터로 대체한 뒤 게임을
+# 시작한다(로비가 영원히 멈추면 안 됨) - 클라이언트도 카운트다운 표시에
+# 같은 값을 써야 해서 NetProtocol(공유 파일)에 정의돼 있다.
+const TRANSFER_COLLECT_MSEC := 1000
+
 var peer := WebSocketMultiplayerPeer.new()
 var room_manager := RoomManager.new()
 
 # hello 확인 전인 접속을 추적한다 - 5초 안에 hello가 안 오면 끊는다(§2.0).
 var _pending_since: Dictionary = {}  # peer_id -> Time.get_ticks_msec()
 var _hello_confirmed: Dictionary = {}  # peer_id -> true
+
+# 2-5 전송 버그 수정 - game_client.gd의 같은 필드와 같은 이유(outbound_buffer_size
+# 기본값 65535바이트를 큰 청크 몇 개가 같은 프레임에 바로 넘긴다). 서버는
+# peer 하나가 여러 접속을 다루므로 접속(peer_id)마다 별도 큐를 둔다 - 한
+# 명에게 보낼 게 밀려도 다른 사람에게 보내는 건 영향받지 않는다.
+var _outgoing_queues: Dictionary = {}  # peer_id(int) -> Array[PackedByteArray]
 
 # GameEvents 릴레이(2-4) - 서버 프로세스 전체에 GameEvents 인스턴스가
 # 하나뿐이라 방마다 새로 구독하지 않는다. 지금 처리 중인 요청이 어느
@@ -74,6 +88,7 @@ func _start_server() -> void:
 
 func _process(_delta: float) -> void:
 	peer.poll()
+	_flush_outgoing_queues()
 
 	var now := Time.get_ticks_msec()
 	for id in _pending_since.keys():
@@ -81,6 +96,8 @@ func _process(_delta: float) -> void:
 			print("[서버] peer %d: %.0f초 안에 hello가 안 와서 연결 종료" % [id, NetProtocol.HELLO_TIMEOUT_SECONDS])
 			_pending_since.erase(id)
 			peer.disconnect_peer(id)
+
+	_service_transferring_rooms(now)
 
 	while peer.get_available_packet_count() > 0:
 		var sender_id := peer.get_packet_peer()
@@ -109,6 +126,7 @@ func _on_peer_disconnected(id: int) -> void:
 	print("[서버] 연결 해제: peer %d" % id)
 	_pending_since.erase(id)
 	_hello_confirmed.erase(id)
+	_outgoing_queues.erase(id)
 	_remove_peer_and_notify(id, "disconnected")
 
 
@@ -158,6 +176,10 @@ func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
 			_handle_request_hold(sender_id, payload)
 		NetProtocol.MSG_REQUEST_SCORE:
 			_handle_request_score(sender_id, payload)
+		NetProtocol.MSG_REQUEST_CHARACTER_PACK:
+			_handle_request_character_pack(sender_id, payload)
+		NetProtocol.MSG_UPLOAD_PACK_CHUNK:
+			_handle_upload_pack_chunk(sender_id, payload)
 		NetProtocol.MSG_HELLO:
 			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
@@ -275,10 +297,33 @@ func _handle_select_character(sender_id: int, payload: Dictionary) -> void:
 	var display_name := NetProtocol.sanitize_display_name(str(meta.get("display_name", "")))
 	if display_name.is_empty():
 		display_name = "플레이어 %d" % (slot_index + 1)
-	var safe_meta := {"id": str(meta.get("id", "")), "display_name": display_name}
+
+	# pack_hash(2-5) - sha256 hex(64자 소문자 hex) 또는 빈 문자열(팩 없음)만
+	# 허용한다. 형식이 다르면 신뢰하지 않고 그냥 "팩 없음"으로 취급한다 -
+	# 이 값이 나중에 캐릭터 팩 전송 대상을 정하는 데 쓰이므로, 이상한
+	# 값을 그대로 흘려보내면 안 된다(원칙 6).
+	var pack_hash := str(meta.get("pack_hash", ""))
+	if not _is_valid_pack_hash(pack_hash):
+		pack_hash = ""
+
+	var safe_meta := {"id": str(meta.get("id", "")), "display_name": display_name, "pack_hash": pack_hash}
 
 	room.slots[slot_index]["meta"] = safe_meta
 	_broadcast_room(room, NetProtocol.MSG_PLAYER_CHARACTER, {"player_index": slot_index, "meta": safe_meta})
+
+
+func _is_valid_pack_hash(value: String) -> bool:
+	if value.is_empty():
+		return true
+	if value.length() != 64:
+		return false
+	for i in value.length():
+		var c := value.unicode_at(i)
+		var is_digit := c >= 48 and c <= 57  # '0'-'9'
+		var is_lower_hex := c >= 97 and c <= 102  # 'a'-'f'
+		if not (is_digit or is_lower_hex):
+			return false
+	return true
 
 
 func _handle_ready(sender_id: int, payload: Dictionary) -> void:
@@ -344,21 +389,138 @@ func _remove_peer_and_notify(peer_id: int, reason: String) -> void:
 		_broadcast_room(room, NetProtocol.MSG_PLAYER_LEFT, {"player_index": slot_index, "reason": reason})
 
 
-## 정원이 다 차고 전원이 준비되면 자동 시작한다(§3). v1은 transferring에서
-## 실제로 전송할 캐릭터 자산이 없으므로(§8) 상태 기계를 거치되 즉시
-## 통과한다. game_started 다음에 game_state.start_turn()을 실제로 호출해서
-## 첫 턴을 연다 - 이게 없으면 turn_started(0)도 안 나가고 첫 스냅샷도
-## "아무것도 시작 안 한" 상태로 나간다.
+## 정원이 다 차고 전원이 준비되면 자동으로 캐릭터 팩 전송 단계로 들어간다(§3).
 func _maybe_start_game(room: Room) -> void:
 	if room.state != Room.State.LOBBY or not room.all_ready():
 		return
+	_begin_transferring(room)
 
-	room.state = Room.State.TRANSFERRING
+
+## TRANSFERRING 상태로 들어가며 요청 수집 창을 연다(2-5 §2단계). 클라이언트는
+## 이 메시지를 받으면 자기 캐시를 확인해서 필요한 것만 request_character_pack을
+## 보낸다.
+func _begin_transferring(room: Room) -> void:
+	room.begin_transfer(Time.get_ticks_msec(), TRANSFER_COLLECT_MSEC)
+	print("[서버] 방 %s 캐릭터 팩 전송 단계 진입" % room.code)
+	_broadcast_room(room, NetProtocol.MSG_TRANSFERRING_STARTED, {})
+
+
+## 매 프레임 TRANSFERRING 방들의 상태 기계를 진행시킨다(2-5 §2단계) - 수집
+## 창이 끝났으면 큐를 만들고, 진행 중인 전송이 60초를 넘겼으면 포기하고
+## 다음으로 넘어간다. 로비가 영원히 멈추는 상황을 막는 핵심 로직이라 방
+## 하나가 막혀도 나머지 방에는 영향이 없도록 방마다 독립적으로 처리한다.
+func _service_transferring_rooms(now: int) -> void:
+	for room in room_manager.rooms.values():
+		if room.state != Room.State.TRANSFERRING:
+			continue
+
+		if room.transfer_state == Room.TransferState.COLLECTING and room.is_collection_expired(now):
+			room.close_collection_and_build_queue()
+			if room.is_transfer_done():
+				_finish_transferring(room)
+			else:
+				_advance_transfer(room, now)
+			continue
+
+		if room.transfer_state == Room.TransferState.TRANSFERRING_PACK and room.is_current_transfer_timed_out(now, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC):
+			print("[서버] 방 %s: 해시 %s 전송이 %.0f초를 넘겨 포기함" % [room.code, room.transfer_current_hash, NetProtocol.PACK_TRANSFER_TIMEOUT_MSEC / 1000.0])
+			_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": room.transfer_current_hash, "reason": "timeout"})
+			_advance_transfer(room, now)
+
+
+## 큐에서 다음 해시를 꺼내 전송을 시작하거나(방 전체에 pack_upload_requested
+## 방송 - 소유자는 이걸 보고 업로드를 시작하고, 나머지는 "누구를 기다리는지"
+## UI를 갱신한다), 큐가 비었으면 게임을 시작한다.
+func _advance_transfer(room: Room, now: int) -> void:
+	var next_hash := room.start_next_transfer(now)
+	if next_hash == "":
+		_finish_transferring(room)
+		return
+	_broadcast_room(room, NetProtocol.MSG_PACK_UPLOAD_REQUESTED, {"hash": next_hash})
+
+
+## game_started 다음에 game_state.start_turn()을 실제로 호출해서 첫 턴을
+## 연다 - 이게 없으면 turn_started(0)도 안 나가고 첫 스냅샷도 "아무것도
+## 시작 안 한" 상태로 나간다.
+func _finish_transferring(room: Room) -> void:
 	room.state = Room.State.IN_GAME
 	print("[서버] 방 %s 게임 시작 (인원 %d)" % [room.code, room.capacity])
 	_broadcast_room(room, NetProtocol.MSG_GAME_STARTED, {"player_count": room.capacity})
 
 	_mutate_and_broadcast(room, func(): room.game_state.start_turn())
+
+
+## "owner_index 슬롯의 팩이 필요하다"는 요청. 수집 창이 아니거나 값이
+## 이상해도 조용히 무시한다 - Room.register_pack_request()가 이미 그 검증을
+## 하지만, 여기서도 room/슬롯 존재 여부는 한 번 더 확인한다(원칙 6).
+func _handle_request_character_pack(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null or room.state != Room.State.TRANSFERRING:
+		return
+
+	var owner_index = _payload_int(payload, "owner_index")
+	if owner_index == null:
+		return
+
+	var requester_index := room.find_slot_by_peer(sender_id)
+	if requester_index == -1:
+		return
+
+	room.register_pack_request(requester_index, owner_index)
+
+
+## 지금 순번인 소유자가 보낸 청크를 그 해시를 요청한 수신자들에게 그대로
+## 릴레이한다(서버는 전체 바이트를 버퍼링하지 않는다 - 해시 검증은 받는 쪽이
+## 전부 받은 뒤 직접 한다). total_bytes가 상한을 넘으면 그 자리에서 포기하고
+## 다음 해시로 넘어간다 - 청크 개수만 믿지 않고 매 청크마다 검사한다(원칙 6,
+## 클라이언트가 total_bytes를 거짓으로 작게 보내고 실제로는 더 많은 청크를
+## 보내는 경우까지 막을 순 없지만, 그런 경우 마지막 청크 판정
+## (sequence == total_chunks-1)이 안 맞아 전송이 그냥 멈춘 채 타임아웃으로
+## 정리된다 - 게임 시작을 막지는 않는다).
+func _handle_upload_pack_chunk(sender_id: int, payload: Dictionary) -> void:
+	var room := room_manager.get_room_for_peer(sender_id)
+	if room == null or room.state != Room.State.TRANSFERRING or room.transfer_state != Room.TransferState.TRANSFERRING_PACK:
+		return
+	if room.find_slot_by_peer(sender_id) != room.transfer_current_owner:
+		return
+
+	var hash := str(payload.get("hash", ""))
+	if hash.is_empty() or hash != room.transfer_current_hash:
+		return
+
+	var sequence = _payload_int(payload, "sequence")
+	var total_chunks = _payload_int(payload, "total_chunks")
+	var total_bytes = _payload_int(payload, "total_bytes")
+	if sequence == null or total_chunks == null or total_bytes == null:
+		return
+	if total_chunks <= 0 or sequence < 0 or sequence >= total_chunks:
+		return
+
+	if total_bytes > CharacterLimits.TOTAL_WARNING_BYTES:
+		print("[서버][전송] 방 %s: 해시 %s가 상한(%s)을 넘어 전송을 포기함" % [room.code, hash, CharacterLimits.format_bytes(CharacterLimits.TOTAL_WARNING_BYTES)])
+		_broadcast_room(room, NetProtocol.MSG_PACK_TRANSFER_FAILED, {"hash": hash, "reason": "oversized"})
+		_advance_transfer(room, Time.get_ticks_msec())
+		return
+
+	# 2-5 전송 진단(청크가 "안 감"과 "왔는데 안 나감"을 구분하기 위함) -
+	# 웹 클라이언트는 브라우저 콘솔이 안 보이므로 이 print()는 항상 서버
+	# 콘솔(헤드리스 네이티브 프로세스)에만 찍힌다. 클라이언트 쪽 진단은
+	# online_screen.gd의 화면 로그(BuildInfo.DEBUG_MODE) 참고.
+	var recipients := room.current_transfer_recipients()
+	print("[서버][전송] 청크 수신 %d/%d(해시=%s, %d바이트) - 수신자 %d명에게 릴레이" % [sequence + 1, total_chunks, hash.substr(0, 8), total_bytes, recipients.size()])
+
+	var data := str(payload.get("data", ""))
+	for recipient_index in recipients:
+		var recipient_slot: Dictionary = room.slots[recipient_index]
+		if recipient_slot != null:
+			_send(recipient_slot["peer_id"], NetProtocol.MSG_PACK_CHUNK, {"hash": hash, "sequence": sequence, "total_chunks": total_chunks, "data": data})
+			var queued: int = _outgoing_queues.get(recipient_slot["peer_id"], []).size()
+			if queued > 0:
+				print("[서버][전송] peer %d에게 보낼 청크가 밀림(대기열 %d개) - outbound_buffer_size 한계, 다음 프레임에 재시도" % [recipient_slot["peer_id"], queued])
+
+	if sequence == total_chunks - 1:
+		print("[서버][전송] 해시 %s 전송 완료(마지막 청크 %d/%d) - 다음 해시로 진행" % [hash.substr(0, 8), sequence + 1, total_chunks])
+		_advance_transfer(room, Time.get_ticks_msec())
 
 
 func _handle_request_roll(sender_id: int, _payload: Dictionary) -> void:
@@ -537,8 +699,40 @@ func _send(peer_id: int, type: String, payload: Dictionary) -> void:
 	var ws_peer := peer.get_peer(peer_id)
 	if ws_peer == null or ws_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return
+
+	var bytes := NetProtocol.encode(type, payload)
+	var queue: Array = _outgoing_queues.get(peer_id, [])
+	if not queue.is_empty():
+		queue.append(bytes)
+		_outgoing_queues[peer_id] = queue
+		return
+
 	peer.set_target_peer(peer_id)
-	peer.put_packet(NetProtocol.encode(type, payload))
+	if peer.put_packet(bytes) != OK:
+		queue.append(bytes)
+		_outgoing_queues[peer_id] = queue
+
+
+## _send()가 못 내보내고 큐에 쌓아둔 메시지를 매 프레임 다시 시도한다(2-5
+## 전송 버그 수정 - 위 필드 주석 참고). 연결이 끊긴 상대의 큐는 그냥
+## 버린다(peer_disconnected에서도 지우지만, 그 사이 프레임에 한 번 더
+## 걸러지는 안전망).
+func _flush_outgoing_queues() -> void:
+	for peer_id in _outgoing_queues.keys():
+		var queue: Array = _outgoing_queues[peer_id]
+		var ws_peer := peer.get_peer(peer_id)
+		if ws_peer == null or ws_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			_outgoing_queues.erase(peer_id)
+			continue
+
+		peer.set_target_peer(peer_id)
+		while not queue.is_empty():
+			if peer.put_packet(queue[0]) != OK:
+				break
+			queue.pop_front()
+
+		if queue.is_empty():
+			_outgoing_queues.erase(peer_id)
 
 
 func _broadcast_room(room: Room, type: String, payload: Dictionary, exclude_peer_id: int = -1) -> void:

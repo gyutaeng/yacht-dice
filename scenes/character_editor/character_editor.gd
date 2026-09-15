@@ -289,7 +289,7 @@ func _on_import_files_picked(files: Array) -> void:
 	_import_button.text = "가져오는 중..."
 	await get_tree().process_frame
 
-	var result := CharacterLibrary.import_pack(files[0]["bytes"])
+	var result := await CharacterLibrary.import_pack(files[0]["bytes"])
 
 	_import_button.text = original_text
 	_import_button.disabled = false

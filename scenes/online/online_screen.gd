@@ -21,11 +21,20 @@ signal character_select_requested()
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8910"
 
 var _client: GameClient = GameClient.new()
+var _pack_transfer: PackTransferClient = PackTransferClient.new()
 
 ## 내가 고른 캐릭터(2-4B) - 게임 화면이 처음 뜰 때 CharacterLibrary의
 ## 첫 항목(내장 기본 포함이라 항상 1개 이상)으로 기본값을 잡아둬서,
 ## [캐릭터 선택]을 안 눌러도 항상 유효한 프로필이 붙어 있게 한다.
 var _my_profile: CharacterProfile
+
+## 내 캐릭터 팩(2-5 §1단계) - 내장 기본 캐릭터는 내보낼 수 없으므로
+## 그때는 둘 다 빈 값이다("팩 없음, 기본 캐릭터 사용"이라는 뜻이고
+## 남들도 그렇게 해석한다). 캐릭터를 고른 시점에 미리 압축+해시까지
+## 끝내둔다 - 나중에 업로드 요청(2단계)이 와도 재압축 없이 바로 보낼 수
+## 있게.
+var _my_pack_bytes: PackedByteArray = PackedByteArray()
+var _my_pack_hash: String = ""
 
 @onready var _connect_panel: VBoxContainer = $CenterContainer/VBox/ConnectPanel
 @onready var _server_address_edit: LineEdit = $CenterContainer/VBox/ConnectPanel/ServerRow/ServerAddressEdit
@@ -51,6 +60,13 @@ var _my_profile: CharacterProfile
 @onready var _lobby_status_label: Label = $CenterContainer/VBox/LobbyPanel/LobbyStatusLabel
 @onready var _leave_button: Button = $CenterContainer/VBox/LobbyPanel/LeaveButton
 
+## 2-5 전송 버그(청크가 하나만 나가고 멈추던 문제) 조사용 - 브라우저 콘솔은
+## print()가 안 닿으므로(1-5) 화면에 직접 남긴다. Main.gd의
+## `_debug_init_log()`와 같은 패턴(최근 N줄만 유지, DEBUG_MODE로 켜고 끔).
+const DEBUG_LOG_MAX_LINES := 40
+@onready var _transfer_debug_log: RichTextLabel = $TransferDebugLog
+var _transfer_debug_log_lines: Array[String] = []
+
 var _my_index: int = -1
 var _room_code: String = ""
 var _capacity: int = 0
@@ -61,12 +77,16 @@ var _connected := false
 
 func _ready() -> void:
 	add_child(_client)
+	add_child(_pack_transfer)
+	_pack_transfer.configure(_client)
+	_pack_transfer.progress_changed.connect(_on_transfer_progress_changed)
+	_pack_transfer.profile_ready.connect(_on_pack_profile_ready)
+	_pack_transfer.debug_log.connect(_append_transfer_debug_log)
+	_transfer_debug_log.visible = BuildInfo.DEBUG_MODE
 	_server_address_edit.text = DEFAULT_SERVER_URL
 
 	var default_profiles := CharacterLibrary.get_selectable_profiles()
-	if not default_profiles.is_empty():
-		_my_profile = default_profiles[0]
-	_refresh_my_character_display()
+	set_my_profile(default_profiles[0] if not default_profiles.is_empty() else null)
 
 	_create_room_button.pressed.connect(func() -> void: _create_room_count_row.visible = true)
 	_join_room_button.pressed.connect(func() -> void: _join_room_row.visible = true)
@@ -94,6 +114,7 @@ func _ready() -> void:
 	_client.player_ready_changed.connect(_on_player_ready_changed)
 	_client.room_player_count_changed.connect(_on_room_player_count_changed)
 	_client.player_left.connect(_on_player_left)
+	_client.transferring_started.connect(_on_transferring_started)
 	_client.game_started.connect(_on_game_started)
 	_client.server_error.connect(_on_server_error)
 	_client.disconnected.connect(_on_disconnected)
@@ -112,6 +133,17 @@ func reset_to_start() -> void:
 ## 부른다(2-4B) - character_select_requested를 emit한 뒤 대응.
 func set_my_profile(profile: CharacterProfile) -> void:
 	_my_profile = profile
+
+	# 내장 기본 캐릭터는 내보낼 수 없다(CharacterLibrary.export_pack_bytes()가
+	# 거부함) - 그때는 "팩 없음"으로 둔다. 압축은 여기서 한 번만 하고
+	# 결과를 들고 있는다(선택할 때마다 다시 압축하지 않음).
+	if profile != null and not profile.is_builtin:
+		_my_pack_bytes = CharacterLibrary.export_pack_bytes(profile)
+		_my_pack_hash = ReceivedPackCache.sha256_hex(_my_pack_bytes) if not _my_pack_bytes.is_empty() else ""
+	else:
+		_my_pack_bytes = PackedByteArray()
+		_my_pack_hash = ""
+
 	_refresh_my_character_display()
 
 
@@ -245,7 +277,7 @@ func _my_character_meta() -> Dictionary:
 		id = _my_profile.id
 	if display_name.is_empty():
 		display_name = "플레이어 %d" % (_my_index + 1)
-	return {"id": id, "display_name": display_name}
+	return {"id": id, "display_name": display_name, "pack_hash": _my_pack_hash}
 
 
 func _on_player_joined(player_index: int, meta: Dictionary) -> void:
@@ -277,14 +309,50 @@ func _on_player_left(player_index: int, _reason: String) -> void:
 	_refresh_lobby_ui()
 
 
+## 서버가 로비를 다 채우고 전송 단계로 들어갔다는 신호(2-5 §2단계) - 화면
+## 전환은 안 하고(로비 화면에 그대로 머무름) 상태 문구만 바꾼다. 실제
+## "누구 걸 받을지" 판단은 PackTransferClient.begin()이 한다.
+func _on_transferring_started() -> void:
+	_lobby_status_label.text = "캐릭터를 주고받는 중..."
+	_pack_transfer.begin(_my_index, _my_profile, _my_pack_bytes, _my_pack_hash, _players)
+
+
+func _on_transfer_progress_changed() -> void:
+	if not _lobby_panel.visible:
+		return
+	var status := _pack_transfer.get_status_text()
+	if status != "":
+		_lobby_status_label.text = status
+
+
+func _on_pack_profile_ready(_player_index: int, _profile: CharacterProfile) -> void:
+	_on_transfer_progress_changed()
+
+
+## PackTransferClient.debug_log를 화면에 받아 적는다(Main.gd의
+## _debug_init_log()와 같은 패턴) - BuildInfo.DEBUG_MODE가 false면 노드 자체가
+## 안 보이지만, 로그 수집 자체는 계속한다(나중에 켜도 최근 기록이 남게).
+func _append_transfer_debug_log(text: String) -> void:
+	print("[전송] %s" % text)
+	if _transfer_debug_log == null:
+		return
+
+	_transfer_debug_log_lines.append("[%s] %s" % [Time.get_time_string_from_system(), text])
+	if _transfer_debug_log_lines.size() > DEBUG_LOG_MAX_LINES:
+		_transfer_debug_log_lines.pop_front()
+
+	_transfer_debug_log.text = "\n".join(_transfer_debug_log_lines)
+
+
 ## 내 슬롯만 내가 실제로 고른 CharacterProfile을 그대로 쓴다(2-4B) - 내
-## 캐릭터는 이미 이 컴퓨터에 있으니 네트워크로 받을 필요가 없다. 남의
-## 슬롯은 여전히 닉네임만 채운 빈 CharacterProfile(voice_map 비어있음,
-## 실루엣 폴백)이다 - 2-3이 정한 v1 범위(문서 §8) 그대로, 2-5에서 실제
-## 캐릭터 팩이 오가면 채워진다. 이 배열이 그대로 VoiceBank.configure()/
-## _build_character_area()/_build_scoreboard()로 넘어가므로(2-4에서 이미
-## 뚫어놓은 경로) 그 함수들은 손댈 필요가 없다 - 로컬에서 "일부만 캐릭터를
-## 설정한 다인 게임"과 입력 모양이 똑같다.
+## 캐릭터는 이미 이 컴퓨터에 있으니 네트워크로 받을 필요가 없다. 남의 슬롯은
+## PackTransferClient가 2-5 §2단계에서 이미 전송을 마치고(또는 캐시 재사용,
+## 또는 실패 시 기본 캐릭터로 대체) 확정해둔 프로필을 그대로 쓴다 - 서버가
+## game_started를 보낼 때는 이미 방 전체의 전송이 끝난(성공이든 실패든)
+## 뒤이므로 get_profile()이 항상 값을 갖고 있어야 하지만, 혹시 몰라 null이면
+## 닉네임만 채운 빈 CharacterProfile로 방어적으로 폴백한다. 이 배열이 그대로
+## VoiceBank.configure()/_build_character_area()/_build_scoreboard()로
+## 넘어가므로(2-4에서 이미 뚫어놓은 경로) 그 함수들은 손댈 필요가 없다.
 func _on_game_started(player_count: int) -> void:
 	print("[온라인] 게임 시작! (%d인)" % player_count)
 
@@ -292,6 +360,10 @@ func _on_game_started(player_count: int) -> void:
 	for i in player_count:
 		if i == _my_index and _my_profile != null:
 			profiles.append(_my_profile)
+			continue
+		var resolved := _pack_transfer.get_profile(i)
+		if resolved != null:
+			profiles.append(resolved)
 			continue
 		var profile := CharacterProfile.new()
 		var display_name: String = _players.get(i, {}).get("meta", {}).get("display_name", "")
