@@ -82,6 +82,10 @@ func _ready() -> void:
 	_pack_transfer.progress_changed.connect(_on_transfer_progress_changed)
 	_pack_transfer.profile_ready.connect(_on_pack_profile_ready)
 	_pack_transfer.debug_log.connect(_append_transfer_debug_log)
+	# 결측 청크 조사(2-5 후속) - GameClient의 패킷 수신 계측(대기/꺼냄 개수,
+	# decode 실패)도 같은 화면 로그로 보이게 한다. 웹 빌드는 브라우저 콘솔의
+	# print()를 못 믿으므로(1-5) 이 화면 로그가 유일하게 믿을 수 있는 창구다.
+	_client.debug_log.connect(_append_transfer_debug_log)
 	_transfer_debug_log.visible = BuildInfo.DEBUG_MODE
 	_server_address_edit.text = DEFAULT_SERVER_URL
 

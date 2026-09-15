@@ -17,6 +17,10 @@ signal player_left(player_index: int, reason: String)
 signal game_started(player_count: int)
 signal server_error(code: String, message: String)
 signal disconnected()
+## 결측 청크 조사(2-5 후속) - "웹은 브라우저 콘솔의 print()를 못 믿는다"(1-5)는
+## 이유로 PackTransferClient와 같은 패턴을 쓴다. BuildInfo.DEBUG_MODE가
+## 꺼져 있으면 emit 자체를 안 한다.
+signal debug_log(text: String)
 
 # 2-4: 실제 게임 진행(docs/multiplayer.md §2.2). state_snapshot은 매번
 # 전체 상태를 담고 있어서(§5) OnlineGameController가 read_only GameState에
@@ -86,6 +90,11 @@ var _outgoing_queue: Array = []
 var _suppress_next_disconnect := false
 
 
+func _log(text: String) -> void:
+	if BuildInfo.DEBUG_MODE:
+		debug_log.emit(text)
+
+
 func _process(_delta: float) -> void:
 	if _state == State.IDLE:
 		return
@@ -97,6 +106,10 @@ func _process(_delta: float) -> void:
 	if status == MultiplayerPeer.CONNECTION_CONNECTED and _state == State.CONNECTING:
 		_state = State.AWAITING_HELLO_ACK
 		_ever_connected = true
+		# 결측 청크 조사 - 실제 핸드셰이크가 끝난 뒤에도 값이 유지되는지
+		# 다시 한번 되읽는다(연결 전 설정이 실제 소켓 생성 시점에 리셋되는
+		# 플랫폼별 차이가 있을 수 있어서 두 시점 다 확인).
+		_log("연결 완료 후 받는 쪽 버퍼: %d바이트" % _peer.get_inbound_buffer_size())
 		_send(NetProtocol.MSG_HELLO, {"protocol_version": NetProtocol.PROTOCOL_VERSION})
 
 	if status == MultiplayerPeer.CONNECTION_DISCONNECTED and _state != State.IDLE:
@@ -111,12 +124,31 @@ func _process(_delta: float) -> void:
 			connection_failed.emit("서버에 연결할 수 없습니다. 주소를 확인해 주세요.")
 		return
 
+	# 결측 청크 조사(2-5 후속, 사용자 요청 계측) - 이 프레임에 큐에 쌓여
+	# 있던 개수와 실제로 꺼낸 개수를 그대로 찍는다(정상이어도 찍음 -
+	# "대기==꺼냄"이 매번 성립하는 것 자체가 while 루프에는 문제가 없다는
+	# 증거이고, 그런데도 청크가 사라진다면 문제는 이 지점 아래(엔진/전송
+	# 계층이거나 아래 decode 실패 쪽)에 있다는 뜻이다). 대기가 0인 프레임은
+	# 로그가 넘치므로 건너뛴다.
+	var available := _peer.get_available_packet_count()
+	var drained := 0
 	while _peer.get_available_packet_count() > 0:
 		_handle_packet(_peer.get_packet())
+		drained += 1
+	if available > 0:
+		_log("프레임 %d: 대기 %d개 → %d개 꺼냄" % [Engine.get_process_frames(), available, drained])
 
 
 func connect_to_server(url: String) -> void:
 	_reset()
+	# 결측 청크 조사(2-5 후속, 사용자 가설 검증) - create_client() 전에
+	# 설정해야 반영된다(네이티브에서 직접 확인함 - 연결 후에 바꾸면 이미
+	# 진행 중인 연결엔 적용 안 될 수 있음). 실제로 반영됐는지는 곧바로
+	# get_inbound_buffer_size()로 되읽어 로그로 남긴다 - 웹에서 이 설정
+	# 자체가 무시될 수 있다는 가능성까지 포함해서 확인하기 위함이다.
+	_peer.set_inbound_buffer_size(NetProtocol.CLIENT_INBOUND_BUFFER_BYTES)
+	_log("받는 쪽 버퍼 설정: 요청 %d바이트 → 실제 %d바이트(get_inbound_buffer_size() 되읽음)" % [NetProtocol.CLIENT_INBOUND_BUFFER_BYTES, _peer.get_inbound_buffer_size()])
+
 	var err := _peer.create_client(url)
 	if err != OK:
 		connection_failed.emit("서버 주소가 올바르지 않습니다.")
@@ -247,6 +279,12 @@ func _to_int_array(raw: Array) -> Array[int]:
 func _handle_packet(bytes: PackedByteArray) -> void:
 	var msg = NetProtocol.decode(bytes)
 	if msg == null:
+		# 결측 청크 조사(2-5 후속) - 지금까지 이 실패는 완전히 조용했다.
+		# get_available_packet_count()/get_packet()은 이 패킷을 정상적으로
+		# 꺼낸 것으로 집계되므로, 위 "대기 N개 → N개 꺼냄" 로그만으로는 이
+		# 지점에서 버려지는 걸 못 잡는다 - 바이트가 손상/절단된 채 도착하면
+		# (JSON 파싱 실패) 여기서 아무 흔적도 안 남기고 사라졌다.
+		_log("[경고] 디코드 실패로 패킷 버림(%d바이트) - JSON 파싱 실패이거나 필드 누락. 바이트 앞부분: %s" % [bytes.size(), bytes.slice(0, mini(bytes.size(), 60)).get_string_from_utf8()])
 		return
 
 	var type: String = msg["type"]

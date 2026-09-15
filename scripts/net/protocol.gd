@@ -57,6 +57,18 @@ const LOCAL_PACK_RESOLVE_TIMEOUT_MSEC := 10000
 # 기존 로컬/서버 타임아웃이 그대로 이어받아 기본 캐릭터로 넘어간다.
 const MAX_CHUNK_RESEND_REQUESTS_PER_HASH := 3
 
+# 결측 청크 조사(2-5 후속, 사용자 가설) - WebSocketPeer의 받는 쪽 버퍼
+# 기본값(65535바이트)은 청크 하나(Base64 후 약 43.8KB)를 1.46개밖에 못
+# 담는다 - 두 개가 연달아 도착하면 두 번째가 밀려날 여지가 있다는 가설을
+# 검증하기 위해 클라이언트(GameClient)의 받는 쪽 버퍼만 넉넉하게 키운다
+# (서버는 이번 조사 대상이 아니라 안 건드림 - 실제 로그에서 서버는 손실이
+# 없었다). 네이티브에서는 `WebSocketMultiplayerPeer.set_inbound_buffer_size()`
+# 로 그대로 반영됨을 직접 확인했지만(기본 65535 → 설정값 그대로 유지),
+# 웹(HTML5) export에서도 이 설정이 실제로 반영되는지는 이 상수를 넣은
+# 빌드를 브라우저에서 돌려봐야 알 수 있다 - 무시되더라도 그 자체가
+# 중요한 정보다(그러면 문제는 이 설정으로 못 건드리는 더 아래 계층에 있다는 뜻).
+const CLIENT_INBOUND_BUFFER_BYTES := 1024 * 1024
+
 # 닉네임(display_name)은 남의 화면에 그대로 뜨는 값이라 클라이언트가 보낸
 # 그대로 믿으면 안 된다(원칙 6). 상수/정리 함수를 여기 하나로 모아서
 # 클라이언트(scenes/online/online_screen.gd)와 서버(server_main.gd) 양쪽이
