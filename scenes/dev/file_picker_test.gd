@@ -22,15 +22,19 @@ var _file_picker_audio: FilePicker
 
 
 func _ready() -> void:
+	_log("빌드: %s" % BuildInfo.BUILD_TIME)
+
 	_file_picker_image = FilePicker.create()
 	add_child(_file_picker_image)
 	_file_picker_image.files_picked.connect(_on_image_files_picked)
 	_file_picker_image.pick_cancelled.connect(_on_image_cancelled)
+	_file_picker_image.debug_log.connect(_on_picker_debug_log.bind("이미지"))
 
 	_file_picker_audio = FilePicker.create()
 	add_child(_file_picker_audio)
 	_file_picker_audio.files_picked.connect(_on_audio_files_picked)
 	_file_picker_audio.pick_cancelled.connect(_on_audio_cancelled)
+	_file_picker_audio.debug_log.connect(_on_picker_debug_log.bind("오디오"))
 
 	_pick_image_button.pressed.connect(_on_pick_image_button_pressed)
 	_pick_audio_button.pressed.connect(_on_pick_audio_button_pressed)
@@ -75,6 +79,13 @@ func _on_image_cancelled() -> void:
 
 func _on_audio_cancelled() -> void:
 	_log("오디오 선택 취소됨")
+
+
+## FilePicker 내부 단계별 진행 상황(선택창 열림/change 이벤트/FileReader 완료 등).
+## 어디서 멈췄는지 화면에서 바로 보려고 붙였다 - 웹에서는 개발자 도구를 열기
+## 번거로우니 이 화면 로그가 사실상 유일한 확인 수단이다.
+func _on_picker_debug_log(message: String, picker_label: String) -> void:
+	_log("[%s] %s" % [picker_label, message])
 
 
 func _add_image_row(file_name: String, bytes: PackedByteArray) -> void:

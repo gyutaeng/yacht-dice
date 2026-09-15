@@ -13,6 +13,13 @@ extends Node
 signal files_picked(files: Array)  # 각 원소: { "name": String, "bytes": PackedByteArray }
 signal pick_cancelled()
 
+## 선택 과정의 중간 단계를 알리는 디버그 로그. 웹에서는 파일 선택창이 뜬 뒤
+## "아무 일도 안 일어나는" 침묵 실패가 흔해서(JS 콜백이 GC되는 등), 어디까지
+## 진행됐는지 화면에서 바로 보이도록 각 단계마다 emit한다. print()도 같이 호출해
+## 브라우저 콘솔에도 동시에 남긴다 - 화면 로그 UI가 아직 없는 상황(콜백이 아예
+## 안 불려서 emit조차 안 되는 경우)을 대비한 이중 채널이다.
+signal debug_log(message: String)
+
 
 static func create() -> FilePicker:
 	if OS.has_feature("web"):
@@ -22,6 +29,11 @@ static func create() -> FilePicker:
 
 func pick_files(_extensions: Array[String], _multiple: bool) -> void:
 	push_error("FilePicker.pick_files()는 추상 메서드다 — FilePicker.create()로 만든 구현체를 써야 한다.")
+
+
+func _debug(message: String) -> void:
+	print("[FilePicker] %s" % message)
+	debug_log.emit(message)
 
 
 ## OS/브라우저의 파일 필터는 참고용일 뿐 강제가 아니다(사용자가 "모든 파일"로
@@ -42,4 +54,5 @@ func _finalize_pick(raw_files: Array, allowed_extensions: Array[String]) -> void
 		else:
 			push_warning("FilePicker: 확장자가 허용 목록에 없어 건너뜀 - %s" % file_name)
 
+	_debug("files_picked 방출 직전 - 받은 %d개 중 %d개 통과" % [raw_files.size(), accepted.size()])
 	files_picked.emit(accepted)

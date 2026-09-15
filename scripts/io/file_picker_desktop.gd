@@ -29,6 +29,7 @@ func pick_files(extensions: Array[String], multiple: bool) -> void:
 	_pending_extensions = extensions
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES if multiple else FileDialog.FILE_MODE_OPEN_FILE
 	_file_dialog.filters = _build_filters(extensions)
+	_debug("파일 다이얼로그를 여는 중 (허용 확장자: %s)" % ", ".join(extensions))
 	_file_dialog.popup_centered_ratio(0.7)
 
 
@@ -54,6 +55,7 @@ func _on_files_selected(paths: PackedStringArray) -> void:
 
 
 func _on_canceled() -> void:
+	_debug("선택 취소됨")
 	pick_cancelled.emit()
 
 
@@ -82,4 +84,5 @@ func _read_paths_threaded(paths: Array) -> void:
 
 
 func _on_read_complete(results: Array) -> void:
+	_debug("백그라운드 스레드 읽기 완료 - %d개 파일" % results.size())
 	_finalize_pick(results, _pending_extensions)

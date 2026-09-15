@@ -17,11 +17,16 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+BuildInfo="*res://build_info.gd"
 GameEvents="*res://autoload/game_events.gd"
 CharacterLibrary="*res://autoload/character_library.gd"
 AssetLoader="*res://autoload/asset_loader.gd"
 VoiceBank="*res://autoload/voice_bank.gd"
 SfxBank="*res://autoload/sfx_bank.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/build_stamp/plugin.cfg")
 
 [display]
 
