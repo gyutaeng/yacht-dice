@@ -39,6 +39,13 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_game_event_relay_classification.gd"),
 	preload("res://scripts/tests/suites/test_pack_transfer_metadata.gd"),
 	preload("res://scripts/tests/suites/test_pack_transfer_resolve_timeout.gd"),
+	preload("res://scripts/tests/suites/test_online_reentry_relay.gd"),
+	preload("res://scripts/tests/suites/test_online_reconnect_messages.gd"),
+	preload("res://scripts/tests/suites/test_pack_relay_buffer_overflow.gd"),
+	preload("res://scripts/tests/suites/test_abandoned_room_cleanup.gd"),
+	preload("res://scripts/tests/suites/test_outbound_buffer_safety.gd"),
+	preload("res://scripts/tests/suites/test_online_ready_toggle.gd"),
+	preload("res://scripts/tests/suites/test_server_port_resolution.gd"),
 ]
 
 

@@ -134,7 +134,13 @@ func remove_peer(peer_id: int, voluntary: bool = true, now_msec: int = 0) -> Dic
 
 	var keep_slot_for_reconnect := not voluntary and (room.state == Room.State.TRANSFERRING or room.state == Room.State.IN_GAME or room.state == Room.State.REMATCHING)
 	if keep_slot_for_reconnect:
-		room.mark_slot_disconnected(slot_index, now_msec)
+		# 친구 대상 실제 베타 테스트 후속(사용자 지적) - REMATCHING(결과
+		# 화면/재대전 대기)은 아무도 이 사람의 턴을 기다리지 않으므로 더
+		# 넉넉한 유예(POST_GAME_RECONNECT_GRACE_MSEC, 3분)를 준다. 그 외
+		# (TRANSFERRING/IN_GAME)는 다른 사람이 실제로 기다리고 있으므로
+		# 기존대로 짧은 유예(IN_GAME_RECONNECT_GRACE_MSEC, 60초)를 쓴다.
+		var grace_msec := NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC if room.state == Room.State.REMATCHING else NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC
+		room.mark_slot_disconnected(slot_index, now_msec, grace_msec)
 	else:
 		room.vacate_by_peer(peer_id)
 

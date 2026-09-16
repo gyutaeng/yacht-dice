@@ -43,6 +43,10 @@ func run(r) -> void:
 	_test_not_ready_occupied_slots_basic(r)
 	_test_not_ready_occupied_slots_ignores_ready(r)
 	_test_not_ready_occupied_slots_skips_vacated_slot_during_rematch(r)
+	_test_begin_rematch_wait_rearms_disconnected_slot_to_post_game_grace(r)
+	_test_begin_rematch_wait_does_not_touch_connected_slot_deadline(r)
+	_test_not_ready_connected_slots_excludes_disconnected(r)
+	_test_grace_expired_disconnected_slots(r)
 
 
 func _test_accepts_lobby_actions(r) -> void:
@@ -172,3 +176,55 @@ func _test_not_ready_occupied_slots_skips_vacated_slot_during_rematch(r) -> void
 
 	var result := room.not_ready_occupied_slots()
 	r.expect_eq("남아있는 슬롯 0만 반환(빈 슬롯 1은 제외, 크래시 없음)", result, [0])
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 게임 도중(IN_GAME) 끊긴
+## 슬롯이 IN_GAME_RECONNECT_GRACE_MSEC(60초) 기준 마감을 갖고 있다가
+## 게임이 끝나는 순간(begin_rematch_wait), 아무도 그 사람의 턴을 더 이상
+## 기다리지 않으므로 POST_GAME_RECONNECT_GRACE_MSEC(3분) 기준으로
+## 다시 계산돼야 한다 - 안 그러면 게임 도중 확보했던 60초의 나머지
+## 몇 초만 남은 채로 결과 화면에 들어가게 된다.
+func _test_begin_rematch_wait_rearms_disconnected_slot_to_post_game_grace(r) -> void:
+	var room := _make_in_game_room()
+	room.mark_slot_disconnected(1, 1000)  # IN_GAME 중 끊김 - 기본값(IN_GAME 유예)으로 마감 잡힘.
+	r.expect_eq("사전 조건 - IN_GAME 유예로 마감이 잡혀 있음", room.slot_disconnect_deadline_msec[1], 1000 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC)
+
+	room.begin_rematch_wait(50000)  # 게임이 끝나는 시각.
+	r.expect_eq("REMATCHING 진입 시 POST_GAME 유예 기준으로 마감이 다시 잡힘", room.slot_disconnect_deadline_msec[1], 50000 + NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC)
+	r.expect_eq("연결 상태 자체는 그대로 GRACE_PERIOD", room.slot_connection_state[1], Room.ConnectionState.GRACE_PERIOD)
+
+
+## 정상 연결된 슬롯은 애초에 GRACE_PERIOD가 아니므로 begin_rematch_wait()이
+## 마감 시각을 건드리지 않아야 한다(연결된 슬롯의 slot_disconnect_deadline_msec는
+## 애초에 의미 없는 값(0)이라 이걸 건드릴 이유도 없다).
+func _test_begin_rematch_wait_does_not_touch_connected_slot_deadline(r) -> void:
+	var room := _make_in_game_room()
+	r.expect_eq("사전 조건 - 연결된 슬롯의 마감 시각은 0", room.slot_disconnect_deadline_msec[0], 0)
+
+	room.begin_rematch_wait(50000)
+	r.expect_eq("연결된 슬롯의 마감 시각은 그대로 0", room.slot_disconnect_deadline_msec[0], 0)
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - not_ready_connected_slots()는
+## 끊긴 사람을 방 전체 타임아웃(REMATCH_READY_TIMEOUT_MSEC) 대상에서 뺀다 -
+## 끊긴 사람은 이제 POST_GAME_RECONNECT_GRACE_MSEC으로 개별 관리되므로.
+func _test_not_ready_connected_slots_excludes_disconnected(r) -> void:
+	var room := _make_in_game_room()
+	room.begin_rematch_wait(1000)
+	room.mark_slot_disconnected(1, 1000, NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC)
+
+	r.expect_eq("연결된 슬롯(0)만 반환, 끊긴 슬롯(1)은 제외", room.not_ready_connected_slots(), [0])
+	r.expect_eq("반면 not_ready_occupied_slots()는 여전히 둘 다(연결 여부 무관)", room.not_ready_occupied_slots(), [0, 1])
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - grace_expired_disconnected_slots()가
+## 마감 시각 전/후를 정확히 가르는지 확인한다.
+func _test_grace_expired_disconnected_slots(r) -> void:
+	var room := _make_in_game_room()
+	room.begin_rematch_wait(1000)
+	room.mark_slot_disconnected(1, 1000, NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC)
+	var deadline: int = room.slot_disconnect_deadline_msec[1]
+
+	r.expect_eq("마감 전엔 빈 목록", room.grace_expired_disconnected_slots(deadline - 1), [])
+	r.expect_eq("마감이 지나면 슬롯 1이 목록에", room.grace_expired_disconnected_slots(deadline), [1])
+	r.expect_eq("연결된 슬롯(0)은 애초에 GRACE_PERIOD가 아니므로 절대 안 걸림", room.grace_expired_disconnected_slots(999999999), [1])

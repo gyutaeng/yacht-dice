@@ -38,7 +38,8 @@ enum TransferState { COLLECTING, TRANSFERRING_PACK, AWAITING_READY, DONE }
 const RECONNECT_TOKEN_BYTES := 24
 
 # 2-6(연결 끊김/재접속, docs/multiplayer.md §6) - 슬롯 하나의 연결 상태.
-# CONNECTED: 정상. GRACE_PERIOD: 끊겼지만 재접속 유예(NetProtocol.RECONNECT_GRACE_MSEC) 안 - peer_id는
+# CONNECTED: 정상. GRACE_PERIOD: 끊겼지만 재접속 유예(NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC
+# 또는 REMATCHING이면 NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC) 안 - peer_id는
 # -1이지만 meta/reconnect_token은 그대로 남아있어 같은 토큰으로 돌아오면
 # 복귀할 수 있다. PAST_GRACE: 유예가 끝나 "확정 이탈"로 넘어감(그때부터
 # 매턴 즉시 자동 처리) - 그래도 같은 토큰이면 나중에 다시 돌아올 수 있다
@@ -203,16 +204,21 @@ func vacate_slot(slot_index: int) -> void:
 	slot_disconnect_deadline_msec[slot_index] = 0
 
 
-## 2-6 - 게임 도중(TRANSFERRING/IN_GAME) 연결이 끊겼을 때 슬롯을 비우지
-## 않고 살려둔다. peer_id만 -1로 만들어 "지금 이 자리에 살아있는 연결이
-## 없다"는 걸 표시하고, meta/reconnect_token은 그대로 둔다 - 같은 토큰으로
-## 오면 find_slot_by_reconnect_token()이 이 슬롯을 찾아 복귀시킬 수 있게.
-func mark_slot_disconnected(slot_index: int, now_msec: int) -> void:
+## 2-6 - 게임 도중(TRANSFERRING/IN_GAME/REMATCHING) 연결이 끊겼을 때 슬롯을
+## 비우지 않고 살려둔다. peer_id만 -1로 만들어 "지금 이 자리에 살아있는
+## 연결이 없다"는 걸 표시하고, meta/reconnect_token은 그대로 둔다 - 같은
+## 토큰으로 오면 find_slot_by_reconnect_token()이 이 슬롯을 찾아 복귀시킬
+## 수 있게. grace_msec은 호출부(RoomManager.remove_peer())가 지금 room.state에
+## 맞는 값(TRANSFERRING/IN_GAME이면 NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC,
+## REMATCHING이면 NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC)을 골라 넘긴다 -
+## Room 자신은 "지금이 게임 중인지 결과 화면인지"로 시간을 다르게 주는
+## 판단을 하지 않고 값만 그대로 적용한다.
+func mark_slot_disconnected(slot_index: int, now_msec: int, grace_msec: int = NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC) -> void:
 	if slot_index < 0 or slot_index >= slots.size() or slots[slot_index] == null:
 		return
 	slots[slot_index]["peer_id"] = -1
 	slot_connection_state[slot_index] = ConnectionState.GRACE_PERIOD
-	slot_disconnect_deadline_msec[slot_index] = now_msec + NetProtocol.RECONNECT_GRACE_MSEC
+	slot_disconnect_deadline_msec[slot_index] = now_msec + grace_msec
 
 
 ## 2-6 - 같은 토큰으로 돌아온 접속을 그 슬롯에 다시 연결한다.
@@ -284,26 +290,72 @@ func all_ready() -> bool:
 	return true
 
 
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 점유된 슬롯이 하나라도
+## 있고, 그 전부가 확정 이탈(PAST_GRACE)이면 true. server_main.gd가 이걸
+## 보고 "볼 사람도 결과를 받을 사람도 없는" IN_GAME 방을 턴 자동 처리로
+## 끝까지 진행시키는 대신 즉시 해제한다. 아무도 점유하지 않은 방
+## (occupied_count()==0)은 "전원 이탈"이 아니라 "애초에 아무도 없음"
+## 이므로 false를 돌려준다 - 두 상황을 호출부가 다르게 다뤄야 한다.
+func all_occupied_slots_past_grace() -> bool:
+	var any_occupied := false
+	for i in slots.size():
+		if slots[i] == null:
+			continue
+		any_occupied = true
+		if slot_connection_state[i] != ConnectionState.PAST_GRACE:
+			return false
+	return any_occupied
+
+
 ## 2-6B - 재대전 대기 중(REMATCHING) 아직 "한 판 더"를 안 누른 채로
-## 남아있는 "점유된" 슬롯의 인덱스 목록. 빈 슬롯(null - 나가서 자리
-## 자체가 빈 경우)은 준비할 사람이 없으므로 제외한다.
+## 남아있는 "점유된" 슬롯의 인덱스 목록(연결 여부 무관). 빈 슬롯(null -
+## 나가서 자리 자체가 빈 경우)은 준비할 사람이 없으므로 제외한다.
 ##
-## server_main.gd의 _service_rematch_rooms()가 이 하나만 쓴다(타임아웃
-## 처리 루프와 매초 카운트다운 방송 루프 둘 다) - 예전엔 이 판단을
-## server_main.gd 안에 두 번 따로 두었다가, `var slot: Dictionary =
-## slots[i]`처럼 배열 원소를 null 검사 전에 타입 있는 변수에 먼저
-## 대입해버리는 실수를 두 곳 모두에 반복했다(대입 자체가 그 자리에서
-## 실패해서 바로 뒤의 "!= null" 검사는 이미 늦음) - REMATCHING 중
-## 누군가 [나가기]로 슬롯을 완전히 비우면(자리가 남에게 안 채워진 채로)
-## 매 프레임 서버가 여기서 죽어 재대전 자체가 멈췄었다. `slot`을
+## server_main.gd의 _service_rematch_rooms()가 매초 카운트다운 방송
+## 루프에서 쓴다 - 예전엔 타임아웃 처리 루프도 이걸 썼지만(후속 - 아래
+## grace_expired_disconnected_slots() 참고), 끊긴 사람은 이제 방 전체
+## 타이머가 아니라 자기 몫의 더 긴 유예로 따로 관리되므로 타임아웃
+## 처리는 not_ready_connected_slots()로 나뉘었다. 이 함수 자체는 여전히
 ## 타입 없이 받아서(players_summary()와 같은 패턴) null 검사가 먼저
-## 먹히게 고치고, 판단 로직을 이 함수 하나로 합쳐 같은 실수를 두 번
-## 반복할 여지를 없앴다.
+## 먹히게 하는 구조를 유지한다 - `var slot: Dictionary = slots[i]`처럼
+## 배열 원소를 null 검사 전에 타입 있는 변수에 먼저 대입하면 REMATCHING
+## 중 누군가 [나가기]로 슬롯을 완전히 비웠을 때 매 프레임 서버가 죽는
+## 사고가 실제로 있었다.
 func not_ready_occupied_slots() -> Array:
 	var result: Array = []
 	for i in slots.size():
 		var slot = slots[i]
 		if slot != null and not slot["ready"]:
+			result.append(i)
+	return result
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 위 not_ready_occupied_slots()와
+## 달리 "연결된" 슬롯만 골라낸다. server_main.gd의 방 전체 대기 시간
+## (REMATCH_READY_TIMEOUT_MSEC) 초과 처리가 이 함수를 쓴다 - 끊긴 사람은
+## 더 이상 이 방 전체 타이머의 대상이 아니고(POST_GAME_RECONNECT_GRACE_MSEC으로
+## 개별 관리, grace_expired_disconnected_slots() 참고), "연결은 멀쩡한데
+## 그냥 준비를 안 누른" 사람만 이 타이머로 내보낸다.
+func not_ready_connected_slots() -> Array:
+	var result: Array = []
+	for i in slots.size():
+		var slot = slots[i]
+		if slot != null and not slot["ready"] and slot_connection_state[i] == ConnectionState.CONNECTED:
+			result.append(i)
+	return result
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - REMATCHING 중 끊긴 채
+## 자기 몫의 유예(POST_GAME_RECONNECT_GRACE_MSEC, mark_slot_disconnected()/
+## begin_rematch_wait()가 설정)가 다 된 슬롯의 인덱스 목록. GRACE_PERIOD
+## 상태만 본다 - REMATCHING 중에는 PAST_GRACE로 전환하는 코드가 없으므로
+## (그 전환은 _service_in_game_rooms()가 IN_GAME 방에만 하는 일) 끊긴
+## 슬롯은 항상 GRACE_PERIOD로 남아있다.
+func grace_expired_disconnected_slots(now_msec: int) -> Array:
+	var result: Array = []
+	for i in slots.size():
+		var slot = slots[i]
+		if slot != null and slot_connection_state[i] == ConnectionState.GRACE_PERIOD and now_msec >= slot_disconnect_deadline_msec[i]:
 			result.append(i)
 	return result
 
@@ -345,14 +397,25 @@ func change_capacity(new_capacity: int) -> bool:
 
 ## 2-6B(같은 방에서 재대전) - 게임이 끝나는 순간 부른다. 전원 다시
 ## 준비해야 하므로 ready를 전부 되돌리고("한 판 더"를 누른 사람만 다시
-## true가 됨), 대기 상한을 잡는다. slot_connection_state는 안 건드린다 -
-## 이 시점엔 다들 CONNECTED이거나(정상 종료) 이미 GRACE_PERIOD로 표시된
-## 상태(게임 도중 끊긴 채 게임이 끝난 경우)일 뿐이라 그대로 유지한다.
+## true가 됨), 대기 상한을 잡는다. slot_connection_state 자체는 안
+## 건드린다 - 이 시점엔 다들 CONNECTED이거나(정상 종료) 이미 GRACE_PERIOD로
+## 표시된 상태(게임 도중 끊긴 채 게임이 끝난 경우)일 뿐이라 그대로 유지한다.
+##
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 이미 GRACE_PERIOD인
+## 슬롯의 유예 "마감 시각"만은 다시 잡아준다. 게임 도중엔
+## IN_GAME_RECONNECT_GRACE_MSEC(60초) 기준으로 마감이 걸려 있었을 텐데,
+## 게임이 막 끝나는 이 순간부터는 아무도 그 사람의 턴을 기다리지
+## 않으므로(사용자 지적) POST_GAME_RECONNECT_GRACE_MSEC(3분) 기준으로
+## 다시 계산해준다 - 안 그러면 게임 도중 확보했던 60초 유예의 나머지
+## 몇 초만 남은 채로 결과 화면에 들어가게 된다.
 func begin_rematch_wait(now_msec: int) -> void:
 	state = State.REMATCHING
-	for slot in slots:
-		if slot != null:
-			slot["ready"] = false
+	for i in slots.size():
+		if slots[i] == null:
+			continue
+		slots[i]["ready"] = false
+		if slot_connection_state[i] == ConnectionState.GRACE_PERIOD:
+			slot_disconnect_deadline_msec[i] = now_msec + NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC
 	rematch_deadline_msec = now_msec + NetProtocol.REMATCH_READY_TIMEOUT_MSEC
 
 

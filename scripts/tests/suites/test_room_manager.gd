@@ -37,6 +37,8 @@ func run(r) -> void:
 	_test_join_room_during_rematching_allows_fresh_join(r)
 	_test_join_room_during_rematching_prefers_token_match(r)
 	_test_involuntary_disconnect_during_rematching_keeps_slot(r)
+	_test_disconnect_during_rematching_uses_post_game_grace(r)
+	_test_disconnect_during_in_game_uses_in_game_grace(r)
 	_test_force_vacate_slot_on_already_empty_slot_does_not_crash(r)
 	_test_force_vacate_slot_out_of_range_does_not_crash(r)
 
@@ -297,6 +299,34 @@ func _test_involuntary_disconnect_during_rematching_keeps_slot(r) -> void:
 	r.expect_eq("슬롯 인덱스는 그대로 1번", result["slot_index"], 1)
 	r.expect_true("슬롯 자체는 안 비워짐", room.slots[1] != null)
 	r.expect_eq("연결 상태는 GRACE_PERIOD", room.slot_connection_state[1], Room.ConnectionState.GRACE_PERIOD)
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 예전엔 REMATCHING 중
+## 끊겨도 IN_GAME과 같은 유예(60초, RECONNECT_GRACE_MSEC)가 설정됐지만
+## 실제로는 아무 서비스 루프도 그 유예를 확인하지 않는 죽은 값이었다
+## (REMATCH_READY_TIMEOUT_MSEC(2분)이 사실상의 유일한 상한). 이제는 명시적으로
+## POST_GAME_RECONNECT_GRACE_MSEC(3분)이 설정되고 실제로 확인된다
+## (server_main.gd::_service_rematch_rooms()의 grace_expired_disconnected_slots() 호출).
+func _test_disconnect_during_rematching_uses_post_game_grace(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.REMATCHING
+
+	room_manager.remove_peer(2, false, 5000)
+	r.expect_eq("REMATCHING 중 끊기면 POST_GAME 유예로 마감 시각이 잡힘", room.slot_disconnect_deadline_msec[1], 5000 + NetProtocol.POST_GAME_RECONNECT_GRACE_MSEC)
+
+
+## 대조군 - IN_GAME 중 끊기면 여전히 짧은 유예(IN_GAME_RECONNECT_GRACE_MSEC,
+## 60초)가 그대로 적용된다(다른 사람이 이 사람의 턴을 실제로 기다리므로).
+func _test_disconnect_during_in_game_uses_in_game_grace(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+
+	room_manager.remove_peer(2, false, 5000)
+	r.expect_eq("IN_GAME 중 끊기면 IN_GAME 유예로 마감 시각이 잡힘", room.slot_disconnect_deadline_msec[1], 5000 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC)
 
 
 ## 2-6B - 이미 빈 슬롯을 다시 force_vacate_slot()하면(예: 같은 슬롯이

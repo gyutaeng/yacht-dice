@@ -16,6 +16,9 @@ func run(r) -> void:
 	_test_relays_events_into_local_game_events(r)
 	_test_relays_die_held_changed(r)
 	_test_relays_game_state_started_as_game_started(r)
+	_test_dispose_disconnects_all_tracked_connections(r)
+	_test_dispose_is_idempotent(r)
+	_test_every_client_signal_connection_is_tracked(r)
 
 
 func _make_controller() -> OnlineGameController:
@@ -127,3 +130,72 @@ func _test_relays_game_state_started_as_game_started(r) -> void:
 
 	GameEvents.game_started.disconnect(on_started)
 	r.expect_eq("game_state_started가 로컬 GameEvents.game_started로 재방출됨", received, [3])
+
+
+## 친구 대상 실제 베타 테스트에서 발견된 버그(재대전/로비 재개설 시 캐릭터
+## 보이스 중복 재생)의 재발 방지(후속 1) - dispose()가 실제로 client의
+## 시그널 연결을 전부 끊는지 직접 확인한다. GameEvents로 다시 emit되는지가
+## 아니라, client 쪽 연결 자체가 사라지는지를 본다(더 근본적인 확인).
+func _test_dispose_disconnects_all_tracked_connections(r) -> void:
+	var client := GameClient.new()
+	var controller := OnlineGameController.new(client, 2, 0)
+
+	r.expect_true("dispose() 전엔 turn_started에 연결이 있음", client.turn_started.get_connections().size() > 0)
+
+	controller.dispose()
+
+	r.expect_eq("dispose() 후 turn_started 연결이 전부 사라짐", client.turn_started.get_connections().size(), 0)
+	r.expect_eq("dispose() 후 state_snapshot_received 연결도 전부 사라짐", client.state_snapshot_received.get_connections().size(), 0)
+	r.expect_eq("dispose() 후 game_state_started 연결도 전부 사라짐", client.game_state_started.get_connections().size(), 0)
+
+
+## 후속 1(사용자 지적) - dispose()는 Main.gd의 _return_to_title()과
+## _enter_game() 두 곳에서 불릴 수 있는 경로가 있다(재대전은 _return_to_title()을
+## 안 거치므로 _enter_game()에서도 한 번 더 방어적으로 부름). 실제로는
+## active_controller가 null로 바뀌거나 교체되어 같은 인스턴스에 두 번
+## 불릴 일이 지금 코드 경로상 없지만, 이 자체가 안전한지(연속 2회 호출해도
+## 에러 없이 조용히 아무 일도 안 하는지)는 별개로 보장돼야 한다 - 이
+## 프로젝트는 _process 안의 에러가 기능을 조용히 마비시키는 사고
+## (_service_rematch_rooms)를 이미 겪었다.
+func _test_dispose_is_idempotent(r) -> void:
+	var client := GameClient.new()
+	var controller := OnlineGameController.new(client, 2, 0)
+
+	controller.dispose()
+	# 여기서 "Signal is already connected"류 에러 없이 통과하면 성공 -
+	# r.expect_*를 더 이상 못 부르는 크래시가 없다는 사실 자체가 증거다.
+	controller.dispose()
+	controller.dispose()
+
+	r.expect_eq("연속 3회 dispose()해도 연결은 여전히 0개(에러 없이 안전)", client.turn_started.get_connections().size(), 0)
+
+
+## 후속 2(사용자 지적) - "connect할 때 쌍을 저장한다"는 규약이 아니라
+## 구조로 강제하고 싶다는 요청. OnlineGameController._connect_tracked()가
+## 이 파일 안에서 _client 시그널에 연결하는 유일한 통로여야 한다 - 이
+## 테스트는 GameClient가 스스로 선언한 모든 시그널(get_script_signal_list(),
+## 상속받은 Node 시그널 제외)을 순회해서, 실제 연결 개수가 _relay_connections
+## 장부에 기록된 개수와 정확히 같은지 리플렉션으로 확인한다. 이 테스트에
+## 쓰는 client는 OnlineGameController 하나만 붙이고 online_screen.gd 등
+## 다른 구독자를 붙이지 않은 "깨끗한" 인스턴스라서, 장부 밖에서 생긴
+## 연결이 있으면 바로 드러난다 - 나중에 누가 _connect_tracked()를 안 거치고
+## _client.xxx.connect(...)를 직접 추가하면 이 테스트가 실패한다.
+func _test_every_client_signal_connection_is_tracked(r) -> void:
+	var client := GameClient.new()
+	var controller := OnlineGameController.new(client, 2, 0)
+
+	var tracked_counts := {}
+	for entry in controller._relay_connections:
+		var sig: Signal = entry[0]
+		var name := sig.get_name()
+		tracked_counts[name] = tracked_counts.get(name, 0) + 1
+
+	var mismatches: Array[String] = []
+	for signal_info in client.get_script().get_script_signal_list():
+		var sig_name: String = signal_info["name"]
+		var actual: int = Signal(client, sig_name).get_connections().size()
+		var tracked: int = tracked_counts.get(sig_name, 0)
+		if actual != tracked:
+			mismatches.append("%s(실제 %d개, 장부 %d개)" % [sig_name, actual, tracked])
+
+	r.expect_eq("GameClient의 모든 시그널 연결이 _relay_connections 장부와 정확히 일치함(장부 밖 connect 없음)", mismatches, [])

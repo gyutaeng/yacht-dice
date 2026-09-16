@@ -297,8 +297,21 @@ func export_pack_bytes(profile: CharacterProfile) -> PackedByteArray:
 	return zip_bytes
 
 
+# ZIPPacker.start_file()의 modified_time 기본값(0)은 "시각 없음"이 아니라
+# 그 순간의 실제 시각으로 해석된다(DOS 타임스탬프, 2초 단위) - 그래서
+# 같은 캐릭터를 다시 내보내도 파일 내용은 완전히 같은데 zip 로컬/중앙
+# 헤더의 시각 필드만 달라져 sha256(pack_hash)이 매번 바뀌었다(재대전마다
+# 캐릭터가 다시 전송되던 원인, 실측: 1.5초 간격 재수출 시 257바이트 중
+# 딱 2바이트만 달랐고 그 위치가 각각 로컬/중앙 헤더의 시각 필드였음).
+# pack_hash는 "내용이 같으면 항상 같아야" 캐시가 의미가 있으므로, 항상
+# 같은 고정값(1)을 넘겨 시각을 완전히 지운다 - 어떤 값이든 상관없고
+# 매 호출 동일하기만 하면 된다.
+const ZIP_ENTRY_PERMISSIONS := 420  # start_file() 기본값과 동일(0o644) - 그대로 유지
+const ZIP_ENTRY_FIXED_MTIME := 1  # 0이 아니기만 하면 됨(0은 "현재 시각"으로 해석됨)
+
+
 func _zip_write_entry(packer: ZIPPacker, entry_name: String, bytes: PackedByteArray) -> void:
-	packer.start_file(entry_name)
+	packer.start_file(entry_name, ZIP_ENTRY_PERMISSIONS, ZIP_ENTRY_FIXED_MTIME)
 	packer.write_file(bytes)
 	packer.close_file()
 

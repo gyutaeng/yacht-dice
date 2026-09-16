@@ -36,6 +36,12 @@ func run(r) -> void:
 	_test_clear_turn_deadline(r)
 	_test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r)
 
+	_test_all_occupied_slots_past_grace_false_when_empty_room(r)
+	_test_all_occupied_slots_past_grace_false_when_one_connected(r)
+	_test_all_occupied_slots_past_grace_false_when_one_still_in_grace_period(r)
+	_test_all_occupied_slots_past_grace_true_when_all_past_grace(r)
+	_test_all_occupied_slots_past_grace_ignores_vacated_slots(r)
+
 
 func _test_new_slot_starts_connected(r) -> void:
 	var room := _make_in_game_room()
@@ -48,14 +54,14 @@ func _test_mark_slot_disconnected_sets_grace_period(r) -> void:
 	r.expect_eq("연결이 끊기면 GRACE_PERIOD", room.slot_connection_state[0], Room.ConnectionState.GRACE_PERIOD)
 	r.expect_eq("peer_id는 -1로 비워짐", room.slots[0]["peer_id"], -1)
 	r.expect_true("슬롯 자체는 안 비워짐(meta/토큰 유지)", room.slots[0] != null)
-	r.expect_eq("마감 시각은 now + 재접속 유예", room.slot_disconnect_deadline_msec[0], 1000 + NetProtocol.RECONNECT_GRACE_MSEC)
+	r.expect_eq("마감 시각은 now + 재접속 유예", room.slot_disconnect_deadline_msec[0], 1000 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC)
 
 
 func _test_grace_expiry(r) -> void:
 	var room := _make_in_game_room()
 	room.mark_slot_disconnected(0, 1000)
-	r.expect_true("유예 시간 전엔 만료 아님", not room.is_grace_expired(0, 1000 + NetProtocol.RECONNECT_GRACE_MSEC - 1))
-	r.expect_true("유예 시간이 지나면 만료", room.is_grace_expired(0, 1000 + NetProtocol.RECONNECT_GRACE_MSEC))
+	r.expect_true("유예 시간 전엔 만료 아님", not room.is_grace_expired(0, 1000 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC - 1))
+	r.expect_true("유예 시간이 지나면 만료", room.is_grace_expired(0, 1000 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC))
 
 
 func _test_mark_slot_reconnected_restores_connected(r) -> void:
@@ -143,7 +149,7 @@ func _test_clear_turn_deadline(r) -> void:
 ## 순서를 재현한 것이라, 그쪽 로직이 바뀌면 이 테스트도 같이 살펴봐야
 ## 한다 - 실제 서버 흐름은 실제 소켓으로도 별도 확인했다.)
 func _test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r) -> void:
-	r.expect_eq("전제 - 재접속 유예와 턴 제한이 정확히 같은 값(60초)이어야 이 경계가 생김", NetProtocol.RECONNECT_GRACE_MSEC, NetProtocol.TURN_TIMEOUT_MSEC)
+	r.expect_eq("전제 - 재접속 유예와 턴 제한이 정확히 같은 값(60초)이어야 이 경계가 생김", NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC, NetProtocol.TURN_TIMEOUT_MSEC)
 
 	var room := _make_in_game_room()
 	room.game_state.start_turn()
@@ -154,7 +160,7 @@ func _test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r) -> void
 	var starting_player: int = room.game_state.current_player
 	r.expect_eq("시작 시점엔 0번 플레이어 턴", starting_player, 0)
 
-	var now2: int = t0 + NetProtocol.RECONNECT_GRACE_MSEC  # == t0 + TURN_TIMEOUT_MSEC(위에서 확인함).
+	var now2: int = t0 + NetProtocol.IN_GAME_RECONNECT_GRACE_MSEC  # == t0 + TURN_TIMEOUT_MSEC(위에서 확인함).
 
 	# --- server_main.gd _service_in_game_rooms()와 같은 순서 ---
 	for i in room.slots.size():
@@ -173,3 +179,42 @@ func _test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r) -> void
 	r.expect_eq("두 조건이 동시에 참이어도 턴 처리는 정확히 한 번", processed_count, 1)
 	r.expect_eq("현재 플레이어가 정확히 한 칸만 넘어감(두 칸 아님)", room.game_state.current_player, (starting_player + 1) % 2)
 	r.expect_true("0번 플레이어의 확정 칸이 정확히 하나만 생김", room.game_state.player_score_confirmed[0].count(true) == 1)
+
+
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 점유 슬롯 전원이 확정
+## 이탈했을 때만 true여야 한다. 방금 만든 방(둘 다 CONNECTED)은 당연히
+## false.
+func _test_all_occupied_slots_past_grace_false_when_empty_room(r) -> void:
+	var room := Room.new("TEST", 2)
+	r.expect_true("아무도 안 앉은 방은 '전원 이탈'이 아니라 '애초에 없음'", not room.all_occupied_slots_past_grace())
+
+
+func _test_all_occupied_slots_past_grace_false_when_one_connected(r) -> void:
+	var room := _make_in_game_room()
+	room.mark_slot_departed(0)
+	r.expect_true("한 명(슬롯 1)이 아직 연결돼 있으면 false", not room.all_occupied_slots_past_grace())
+
+
+func _test_all_occupied_slots_past_grace_false_when_one_still_in_grace_period(r) -> void:
+	var room := _make_in_game_room()
+	room.mark_slot_departed(0)
+	room.mark_slot_disconnected(1, 1000)  # 슬롯 1은 아직 유예 중(GRACE_PERIOD) - PAST_GRACE 아님.
+	r.expect_true("한 명이 아직 유예 중(재접속 가능)이면 false", not room.all_occupied_slots_past_grace())
+
+
+func _test_all_occupied_slots_past_grace_true_when_all_past_grace(r) -> void:
+	var room := _make_in_game_room()
+	room.mark_slot_departed(0)
+	room.mark_slot_departed(1)
+	r.expect_true("점유된 슬롯 전부가 확정 이탈이면 true", room.all_occupied_slots_past_grace())
+
+
+## 슬롯 하나가 자발적 이탈(leave())로 완전히 비워진(null) 상태라면 "점유된"
+## 슬롯이 아니므로 판정 대상에서 빠져야 한다 - 나머지 한 명만 확정
+## 이탈이어도 true가 나와야 정상(빈 슬롯은 "아직 연결돼 있을지도 모르는
+## 사람"이 아니라 그냥 없는 자리이므로).
+func _test_all_occupied_slots_past_grace_ignores_vacated_slots(r) -> void:
+	var room := _make_in_game_room()
+	room.vacate_by_peer(PEER_A)  # 슬롯 0을 자발적 이탈로 완전히 비움(null).
+	room.mark_slot_departed(1)
+	r.expect_true("빈 슬롯은 제외하고, 남은 점유 슬롯만으로 판단", room.all_occupied_slots_past_grace())

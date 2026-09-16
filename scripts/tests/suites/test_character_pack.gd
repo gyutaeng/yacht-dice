@@ -20,6 +20,7 @@ func run(r) -> void:
 	await _test_rejects_unsafe_paths(r)
 	await _test_rejects_disallowed_extension(r)
 	await _test_orphaned_voice_event_key_is_imported_without_error(r)
+	await _test_export_pack_bytes_is_deterministic_across_time(r)
 
 
 func _make_test_profile(r, suffix: String) -> CharacterProfile:
@@ -176,3 +177,29 @@ func _test_orphaned_voice_event_key_is_imported_without_error(r) -> void:
 	r.expect_true("save_profile()의 고아 파일 정리가 yacht.zero 보이스 파일을 안 지움", FileAccess.file_exists(zero_voice_path))
 
 	CharacterLibrary.delete(imported.id)
+
+
+## 2-5 후속(친구 대상 실제 테스트에서 발견) - 재대전마다 같은 캐릭터가
+## 다시 전송되던 버그의 원인이었다. ZIPPacker.start_file()의 modified_time
+## 기본값(0)이 "시각 없음"이 아니라 호출 시점의 실제 시각으로 해석되어,
+## 내용이 완전히 같은 캐릭터를 시간 간격을 두고 다시 내보내면 zip 헤더의
+## 시각 필드만 달라져 sha256(pack_hash)이 매번 바뀌었다 - Room.compute_needed_hashes()가
+## 매번 "새 캐릭터"로 오판해 불필요하게 재전송했다. DOS 타임스탬프는 2초
+## 단위라 짧은 지연으로는 재현이 안 될 수 있어(우연히 같은 2초 구간에
+## 걸릴 수 있음) 일부러 2.5초를 기다려 경계를 확실히 넘긴다.
+func _test_export_pack_bytes_is_deterministic_across_time(r) -> void:
+	var profile := _make_test_profile(r, "determinism")
+	if profile == null:
+		return
+	profile.display_name = "결정성 테스트"
+	CharacterLibrary.save_profile(profile)
+
+	var bytes1 := CharacterLibrary.export_pack_bytes(profile)
+	OS.delay_msec(2500)
+	var bytes2 := CharacterLibrary.export_pack_bytes(profile)
+
+	r.expect_true("내용이 같으면 2.5초 뒤에 다시 내보내도 zip 바이트가 완전히 같음", bytes1 == bytes2)
+	if bytes1 == bytes2:
+		r.expect_true("따라서 pack_hash(sha256)도 항상 같음", ReceivedPackCache.sha256_hex(bytes1) == ReceivedPackCache.sha256_hex(bytes2))
+
+	CharacterLibrary.delete(profile.id)

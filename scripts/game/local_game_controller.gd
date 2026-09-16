@@ -39,6 +39,13 @@ func leave_game() -> void:
 	pass  # 나갈 서버가 없다.
 
 
+## OnlineGameController.dispose()와 짝을 맞추기 위한 덕타이핑 계약(Main.gd가
+## active_controller가 어느 쪽이든 구분 없이 dispose()를 부를 수 있게) -
+## 로컬은 정리할 외부 구독이 없으므로 아무 것도 안 한다.
+func dispose() -> void:
+	pass
+
+
 ## 2-4의 "리모컨" 구조 유지(사용자 지적) - 게임 종료 화면이 로컬/온라인을
 ## 직접 구분하지 않도록, "이 화면에서 가능한 행동"을 컨트롤러가 정해서
 ## 넘겨준다. 로컬은 재대전(같은 방 개념)이 없으므로 바로 다시 시작하는

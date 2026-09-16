@@ -527,6 +527,7 @@ func _on_game_over_action_pressed(action_id: String) -> void:
 func _return_to_title() -> void:
 	if active_controller != null:
 		active_controller.leave_game()
+		active_controller.dispose()
 	active_controller = null
 	my_player_index = -1
 
@@ -705,6 +706,16 @@ func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = 
 	_debug_init_log("게임 시작 초기화 시작 (인원 %d명)" % profiles.size())
 	_debug_log_special_hand_subscribers()
 	_clear_dynamic_nodes()
+
+	# 재대전([한 판 더])은 _return_to_title()을 거치지 않고 곧장 여기로 다시
+	# 들어온다(2-6B) - 그래서 이전 컨트롤러의 dispose()가 거기서 불릴 기회가
+	# 없다. 여기서도 한 번 더 불러 어느 경로로 두 번째 판에 들어와도(재대전이든
+	# 로비 재개설이든) 이전 컨트롤러가 건 구독이 남지 않게 한다(위
+	# OnlineGameController._relay_connections 주석 참고 - 실제로 이 누락 때문에
+	# 캐릭터 보이스가 두 번 재생되는 버그가 있었다). _return_to_title()을 거쳐
+	# 이미 active_controller가 null인 정상 경로에서는 아무 일도 안 한다.
+	if active_controller != null:
+		active_controller.dispose()
 
 	active_controller = controller
 	my_player_index = my_index

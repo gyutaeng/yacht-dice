@@ -89,6 +89,14 @@ var _ever_connected := false
 # 자체가 그 착각을 만들면 다음 사람이 또 같은 실수를 반복한다.
 var _outgoing_queue: Array = []
 
+# 데드락 방지 안전장치 2/3(친구 대상 베타 후속) - server_main.gd의 같은
+# 필드/함수와 같은 이유(그쪽 주석 참고) - 시작 시점 검사(1/3)가 못 잡는
+# 경로까지 대비한 마지막 관측 장치. 서버는 접속마다 별도 큐지만 클라이언트는
+# 서버 하나뿐이라 스칼라로 충분하다.
+var _outgoing_stall_last_size: int = -1
+var _outgoing_stall_last_progress_msec: int = 0
+var _outgoing_stall_next_warning_msec: int = 0
+
 # PROTOCOL_MISMATCH를 받으면 서버가 곧바로 연결을 끊는다(§2.0) - 그 직후의
 # 일반적인 disconnected 신호까지 같이 쏘면 UI가 "게임 버전이 다릅니다"
 # 메시지를 "연결이 끊어졌습니다" 같은 일반 문구로 덮어써 버릴 수 있어서,
@@ -102,10 +110,48 @@ var _suppress_next_disconnect := false
 # get_peak_available()로 최댓값을 읽어 요약 로그를 남긴다.
 var _peak_available := 0
 
+# 4번/5번 조사(사용자 요청) - Cloudflare 임시 터널이 범인인지 서버 자체
+# 문제인지를 나중에 로그 세 개(서버 콘솔/클라이언트 화면 로그/cloudflared
+# 창)를 시각으로 맞춰서 가려낼 수 있어야 한다. 서버가 `_last_seen_msec`로
+# "마지막으로 뭐든 온 시각"을 재는 것과 같은 개념을 클라이언트에도 둔다.
+var _last_received_msec: int = 0
+# 핑 간격 계측 - 진짜 왕복 시간(RTT)은 아니다(현재 프로토콜은 서버가 보낸
+# ping에 클라이언트가 pong만 돌려줄 뿐, 그 pong이 서버에 도착하기까지 걸린
+# 시간을 클라이언트가 알 방법이 없다 - RTT는 서버 쪽에서만 잴 수 있음).
+# 대신 "직전 ping으로부터 몇 ms 만에 다음 ping이 왔는가"를 잰다 - 서버는
+# PING_INTERVAL_MSEC(5초)마다 보내므로, 이 값이 계속 5000ms 근처면 연결이
+# 정상이고 크게 벌어지면(터널이 지연시키거나 끊기기 직전이면) 바로 보인다.
+var _last_ping_received_msec: int = -1
+
+# 4번/5번 조사 - close_code/close_reason은 연결이 끊긴 "그 순간"
+# (peer_disconnected 시그널)에만 안전하게 읽을 수 있다. _process()에서
+# get_connection_status()로 DISCONNECTED를 감지한 시점엔 엔진이 이미
+# 내부 peer 목록에서 지워버려 get_peer()가 에러를 낸다(실제로 겪음 -
+# "Condition "!peers_map.has(p_id)" is true" 콘솔 에러) - 그래서 신호
+# 시점에 미리 캡처해뒀다가 _process()는 이 값만 읽는다.
+var _last_close_code: int = -1
+var _last_close_reason: String = ""
+
+
+func _ready() -> void:
+	_wire_peer_signals()
+
 
 func _log(text: String) -> void:
 	if BuildInfo.DEBUG_MODE:
 		debug_log.emit(text)
+
+
+## _peer가 (재)생성될 때마다 불러야 한다 - peer_disconnected는 그 순간의
+## close_code/close_reason을 놓치지 않고 캡처하는 유일한 지점이다.
+func _wire_peer_signals() -> void:
+	_peer.peer_disconnected.connect(_on_ws_peer_disconnected)
+
+
+func _on_ws_peer_disconnected(id: int) -> void:
+	var closed_peer := _peer.get_peer(id)
+	_last_close_code = closed_peer.get_close_code() if closed_peer != null else -1
+	_last_close_reason = closed_peer.get_close_reason() if closed_peer != null else ""
 
 
 func _process(_delta: float) -> void:
@@ -128,6 +174,19 @@ func _process(_delta: float) -> void:
 	if status == MultiplayerPeer.CONNECTION_DISCONNECTED and _state != State.IDLE:
 		var was_ever_connected := _ever_connected
 		var suppress := _suppress_next_disconnect
+		# 4번/5번 조사(사용자 요청) - close_code/close_reason은
+		# _on_ws_peer_disconnected()가 peer_disconnected 시그널 시점에 미리
+		# 캡처해둔 값이다(위 주석 참고 - 여기서 다시 get_peer()를 부르면
+		# 이미 늦어서 에러가 난다). WebSocket 표준 종료 코드 1000=정상 종료,
+		# 1001=상대가 떠남, 1006=비정상 종료(정상적인 종료 프레임 없이 끊김 -
+		# 터널이 그냥 죽었을 때 전형적으로 이 코드가 남는다. kill -9로 서버를
+		# 강제 종료해 직접 재현했을 때도 정상 종료 프레임이 없어 -1(코드 없음)
+		# 로 남는 것까지 확인했다).
+		var elapsed_sec := ((Time.get_ticks_msec() - _last_received_msec) / 1000.0) if _last_received_msec > 0 else -1.0
+		if elapsed_sec >= 0:
+			_log("[연결끊김] close_code=%d close_reason=%s 마지막 수신 후 %.1f초" % [_last_close_code, _last_close_reason, elapsed_sec])
+		else:
+			_log("[연결끊김] close_code=%d close_reason=%s (한 번도 메시지를 못 받음)" % [_last_close_code, _last_close_reason])
 		_reset()
 		if suppress:
 			pass
@@ -162,6 +221,22 @@ func connect_to_server(url: String) -> void:
 	# 자체가 무시될 수 있다는 가능성까지 포함해서 확인하기 위함이다.
 	_peer.set_inbound_buffer_size(NetProtocol.CLIENT_INBOUND_BUFFER_BYTES)
 	_log("받는 쪽 버퍼 설정: 요청 %d바이트 → 실제 %d바이트(get_inbound_buffer_size() 되읽음)" % [NetProtocol.CLIENT_INBOUND_BUFFER_BYTES, _peer.get_inbound_buffer_size()])
+
+	# 확정 3(실제 베타 테스트) - 보내는 쪽(내가 캐릭터 팩 소유자일 때 업로드)도
+	# 기본값(65535)이었다. 43KB짜리 청크를 연달아 올리면 이 버퍼가 넘친다 -
+	# 아래 _flush_outgoing_queue()의 재시도가 결국은 다 보내주지만, 버퍼를
+	# 키워 애초에 넘칠 압력 자체를 줄인다.
+	_peer.set_outbound_buffer_size(NetProtocol.CLIENT_OUTBOUND_BUFFER_BYTES)
+	_log("보내는 쪽 버퍼 설정: 요청 %d바이트 → 실제 %d바이트(get_outbound_buffer_size() 되읽음)" % [NetProtocol.CLIENT_OUTBOUND_BUFFER_BYTES, _peer.get_outbound_buffer_size()])
+
+	# 데드락 방지 안전장치 1/3(친구 대상 베타 후속, 사용자 지적) - server_main.gd의
+	# 같은 검사와 이유가 같다(protocol.gd의 can_chunk_ever_be_sent() 참고).
+	# 클라이언트도 캐릭터 팩을 업로드하는 쪽이 될 수 있으므로 같은 조합
+	# 오류가 여기서도 조용한 정체를 만들 수 있다.
+	if not NetProtocol.can_chunk_ever_be_sent(_peer.get_outbound_buffer_size()):
+		_log("[치명적 설정 오류] 보내는 쪽 버퍼(%d바이트)가 청크 하나(약 %d바이트 추정)조차 빈 상태에서도 못 담습니다 - 연결하지 않습니다." % [_peer.get_outbound_buffer_size(), NetProtocol.estimate_encoded_chunk_bytes()])
+		connection_failed.emit("클라이언트 설정 오류로 연결할 수 없습니다.")
+		return
 
 	var err := _peer.create_client(url)
 	if err != OK:
@@ -238,10 +313,18 @@ func close() -> void:
 func _reset() -> void:
 	_peer.close()
 	_peer = WebSocketMultiplayerPeer.new()
+	_wire_peer_signals()
 	_state = State.IDLE
 	_ever_connected = false
 	_suppress_next_disconnect = false
 	_outgoing_queue.clear()
+	_last_received_msec = 0
+	_last_ping_received_msec = -1
+	_last_close_code = -1
+	_last_close_reason = ""
+	_outgoing_stall_last_size = -1
+	_outgoing_stall_last_progress_msec = 0
+	_outgoing_stall_next_warning_msec = 0
 
 
 ## 지금 보내기 대기 중인 메시지 수 - 진단 로그용(PackTransferClient가
@@ -262,6 +345,20 @@ func reset_peak_available() -> void:
 	_peak_available = 0
 
 
+## 확정 2(실제 베타 테스트 - 청크 유실) - `put_packet()`의 반환값은 보내는
+## 쪽 버퍼가 넘칠 때 이 초과를 알려주지 않는다(직접 최소 재현 스크립트로
+## 확인한 Godot 4.7.2 엔진 동작 - 버퍼가 이미 찬 상태에서 또 불러도
+## `put_packet()`은 OK를 돌려주면서 그 바이트를 조용히 버린다. 엔진
+## 콘솔에는 `Returning: ERR_OUT_OF_MEMORY`가 찍히지만 그건 내부 로그일
+## 뿐 `put_packet()`의 반환값에는 안 실린다). 그래서 반환값을 사후에
+## 확인하는 대신 `get_current_outbound_buffered_amount()`로 "지금 이미
+## 못 나간 데이터가 얼마나 있는지"를 **호출 전에 미리** 확인한다
+## (`NetProtocol.has_room_to_send_now()`) - 서버 쪽 `_send()`와 같은 이유,
+## 같은 방식(server_main.gd 참고). 확정 2 후속(사용자 지적) - "조금이라도
+## 남아있으면 무조건 큐로"가 아니라 "남은 양 + 이번 크기 + 청크 하나
+## 여유"가 한도를 안 넘으면 바로 보낸다 - 안 그러면 1MB로 키운 버퍼가
+## 프레임당 패킷 하나만 나가서 사실상 무의미해진다(실측 - 아래 참고).
+##
 ## 반환값(bool)은 즉시 put_packet()에 성공했는지다 - 큐에 들어갔으면 false.
 ## on_sent가 유효하면, 실제로 put_packet()에 성공하는 그 순간(여기서
 ## 즉시든, _flush_outgoing_queue()에서 나중이든) 딱 한 번 호출한다.
@@ -270,11 +367,16 @@ func _send(type: String, payload: Dictionary, on_sent: Callable = Callable()) ->
 		return false
 
 	var bytes := NetProtocol.encode(type, payload)
-	if not _outgoing_queue.is_empty():
+	var server_peer := _peer.get_peer(1)  # 클라이언트에게 서버는 항상 peer id 1.
+	var has_room := server_peer == null or NetProtocol.has_room_to_send_now(server_peer.get_current_outbound_buffered_amount(), bytes.size(), server_peer.get_outbound_buffer_size())
+	if not _outgoing_queue.is_empty() or not has_room:
 		_outgoing_queue.append({"bytes": bytes, "on_sent": on_sent})
 		return false
 
 	if _peer.put_packet(bytes) != OK:
+		# 반환값 자체를 못 믿는다는 게 위에서 확인된 사실이지만, 다른
+		# 이유(예: 연결이 그 사이 끊김)로 진짜 에러가 나는 경우까지 놓치면
+		# 안 되므로 방어적으로 유지한다.
 		_outgoing_queue.append({"bytes": bytes, "on_sent": on_sent})
 		return false
 
@@ -284,14 +386,54 @@ func _send(type: String, payload: Dictionary, on_sent: Callable = Callable()) ->
 
 
 func _flush_outgoing_queue() -> void:
+	var server_peer := _peer.get_peer(1)
 	while not _outgoing_queue.is_empty():
+		# 확정 2 후속 - put_packet() 전에 버퍼에 여유가 있는지 먼저 확인한다
+		# (위 _send() 주석 참고) - "조금이라도 남아있으면 무조건 대기"가
+		# 아니라 has_room_to_send_now()로 "이 항목 하나는 지금 보내도
+		# 안전한지"를 판단해서, 한 프레임에 여러 개를 몰아 보낼 수 있게
+		# 한다(1MB 버퍼를 실제로 활용). 여유가 없으면 이번 프레임은 여기서
+		# 멈추고 다음 프레임에 다시 확인한다.
 		var entry: Dictionary = _outgoing_queue[0]
+		if server_peer != null and not NetProtocol.has_room_to_send_now(server_peer.get_current_outbound_buffered_amount(), entry["bytes"].size(), server_peer.get_outbound_buffer_size()):
+			break
 		if _peer.put_packet(entry["bytes"]) != OK:
 			break
 		_outgoing_queue.pop_front()
 		var on_sent: Callable = entry.get("on_sent", Callable())
 		if on_sent.is_valid():
 			on_sent.call()
+
+	_check_outgoing_stall(_outgoing_queue.size(), server_peer)
+
+
+## 데드락 방지 안전장치 2/3 - server_main.gd의 _check_outgoing_stall()과
+## 같은 판단 기준(TRANSFER_STALL_WARNING_SEC 동안 안 줄면 경고, 줄어드는
+## 방향으로만 진전 인정). queue_size가 0이면 정체 추적을 지운다.
+func _check_outgoing_stall(queue_size: int, server_peer: WebSocketPeer) -> void:
+	if queue_size == 0:
+		_outgoing_stall_last_size = -1
+		return
+
+	var now := Time.get_ticks_msec()
+	if _outgoing_stall_last_size == -1 or queue_size < _outgoing_stall_last_size:
+		_outgoing_stall_last_size = queue_size
+		_outgoing_stall_last_progress_msec = now
+		_outgoing_stall_next_warning_msec = 0
+		return
+
+	_outgoing_stall_last_size = queue_size
+	var stalled_sec := (now - _outgoing_stall_last_progress_msec) / 1000.0
+	if stalled_sec < NetProtocol.TRANSFER_STALL_WARNING_SEC or now < _outgoing_stall_next_warning_msec:
+		return
+
+	var waiting_bytes := 0
+	if not _outgoing_queue.is_empty():
+		waiting_bytes = _outgoing_queue[0]["bytes"].size()
+	var buffered := server_peer.get_current_outbound_buffered_amount() if server_peer != null else -1
+	var limit := server_peer.get_outbound_buffer_size() if server_peer != null else -1
+	_log("[경고] %.0f초간 진전 없음 - 내 보내기 대기열 %d개, 버퍼 사용량 %d/%d바이트, 맨 앞 메시지 %d바이트" % [stalled_sec, queue_size, buffered, limit, waiting_bytes])
+	_outgoing_stall_next_warning_msec = now + int(NetProtocol.TRANSFER_STALL_WARNING_SEC * 1000)
 
 
 ## GameEvents의 dice_rolled/game_ended는 Array[int]로 타입이 고정돼 있어서
@@ -305,6 +447,10 @@ func _to_int_array(raw: Array) -> Array[int]:
 
 
 func _handle_packet(bytes: PackedByteArray) -> void:
+	# 4번/5번 조사 - 서버의 _last_seen_msec과 같은 개념(뭐든 왔다는 것
+	# 자체가 이 접속이 아직 살아있다는 증거, 디코드 성공 여부와 무관).
+	_last_received_msec = Time.get_ticks_msec()
+
 	var msg = NetProtocol.decode(bytes)
 	if msg == null:
 		# 결측 청크 조사(2-5 후속) - 지금까지 이 실패는 완전히 조용했다.
@@ -375,6 +521,13 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 		NetProtocol.MSG_PING:
 			# 2-6(§6) - 시그널 없이 바로 응답한다. "나 아직 살아있다"는
 			# 확인일 뿐이라 UI가 알 필요 없는 배선 수준의 응답이다.
+			# 4번/5번 조사 - 진짜 RTT는 아니지만(위 _last_ping_received_msec
+			# 주석 참고) ping 간격이 정상(5초 근처)에서 벗어나면 연결이
+			# 이미 흔들리고 있다는 신호라 로그로 남긴다.
+			var now := Time.get_ticks_msec()
+			if _last_ping_received_msec > 0:
+				_log("[핑] 직전 ping으로부터 %dms 만에 수신(정상은 %d ms 근처)" % [now - _last_ping_received_msec, NetProtocol.PING_INTERVAL_MSEC])
+			_last_ping_received_msec = now
 			_send(NetProtocol.MSG_PONG, {})
 		NetProtocol.MSG_PLAYER_RECONNECTED:
 			player_reconnected.emit(int(payload.get("player_index", -1)))

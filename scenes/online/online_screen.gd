@@ -314,23 +314,69 @@ func _on_leave_pressed() -> void:
 	_show_connect_panel()
 
 
+## 친구 대상 실제 베타 테스트 후속(사용자 지적) - 서버가 "슬롯 0에서
+## 동일한 ready 값이 연속으로 수신됨"을 경고한 근본 원인. 예전엔 `current`를
+## `_players`(서버 echo로만 갱신되는 캐시)에서 읽기만 하고 로컬 값은 안
+## 바꿨다 - 그래서 왕복 시간 안에 이 핸들러가 두 번 불리면(웹 브라우저가
+## 탭 하나를 터치+마우스 클릭 두 이벤트로 겹쳐 보내는 경우가 실제로 있음 -
+## Godot HTML5 export의 알려진 특성) 둘 다 같은 `current`를 읽어 같은 값을
+## 두 번 보낸다. ready가 절대값이라 지금은 상태가 안 뒤집히지만, 두 번째
+## 클릭이 "진짜 토글 의도"였다면(빠르게 두 번 눌러 켰다 끄려 함) 서버에는
+## 같은 값만 두 번 가고 의도한 두 번째 토글이 사라진다 - 그래서 보내는
+## 즉시 로컬 캐시도 낙관적으로 갱신해서, 그 다음 호출(진짜 두 번째 클릭이든
+## 중복 이벤트든)은 이미 뒤집힌 값을 기준으로 판단하게 한다.
 func _on_ready_button_pressed() -> void:
 	var current: bool = _players.get(_my_index, {}).get("ready", false)
-	_client.set_ready(not current)
+	var next := not current
+	if _players.has(_my_index):
+		_players[_my_index]["ready"] = next
+		_refresh_lobby_ui()
+	_client.set_ready(next)
 
 
 func _on_host_set_player_count(count: int) -> void:
 	_client.set_player_count(count)
 
 
-## 2-6(§6) - 첫 접속(서버 기상 대기)/게임 도중 재접속 공용 재시도 루프.
-## ReconnectBackoff가 상한에 닿을 때까지 지수 백오프로 계속 다시 붙어본다.
+## 지금 어떤 상황으로 재시도 중인지에 따라 다른 안내 문구를 고른다 - 순수
+## 판단 로직만 따로 빼서(_on_connection_failed()의 await/타이머와 분리)
+## 실제 타이머를 기다리지 않고도 헤드리스로 바로 검증할 수 있게 했다
+## (test_online_reconnect_messages.gd).
+func _connection_retry_label() -> String:
+	if _reconnecting_after_disconnect:
+		return "게임 도중 재접속 시도 중"
+	if _resuming_session:
+		return "이전 게임에 다시 연결하는 중"
+	return "서버를 깨우는 중입니다(최대 1분)"
+
+
+## 2-6(§6) - 첫 접속(서버 기상 대기)/게임 도중 재접속/세션 복귀(F5) 공용
+## 재시도 루프. ReconnectBackoff가 상한에 닿을 때까지 지수 백오프로 계속
+## 다시 붙어본다.
+##
+## 5번 버그 조사(사용자 신고 - 게임이 끝난 뒤 새로고침하면 "서버를 깨우는
+## 중"이라는 안내가 뜨고 방으로 못 돌아옴) - room.gd의 재접속 수락 로직
+## 자체는 REMATCHING을 TRANSFERRING/IN_GAME과 동일하게(오히려 재대전 대기
+## 시간 2분으로 더 넉넉하게) 받아주도록 이미 짜여 있어서(RoomManager.join_room()
+## 의 토큰 매칭이 "방 상태와 무관하게" 항상 먼저 확인됨 - 방 상태로 거부하는
+## 코드가 없음을 직접 확인했다), 이 증상은 join_room 요청이 서버에 도달하기도
+## 전에 connect_to_server() 자체가 실패하고 있다는 뜻이다(바로 이 함수가
+## 불리는 경로). 즉 진짜 원인은 room.gd가 아니라 "그 시점에 서버가 응답하지
+## 않았다"일 가능성이 높다 - 4번(두 번째 게임 도중 서버 접속이 끊김)과 같은
+## 근본 원인일 수 있다(취소된 4번을 로그만 남기고 다음 재현을 기다리는 이유).
+##
+## 그와 별개로 여기 문구 자체에도 실제 버그가 있었다: attempt_session_resume()
+## (F5로 이전 세션에 복귀 시도)은 _reconnecting_after_disconnect를 안 켜므로
+## 항상 else 분기로 빠져 "서버를 깨우는 중입니다"가 떴다 - 이 서버는 사용자
+## 자신의 로컬 서버라 깨울 대상이 없는데도, Render 배포용으로 쓰려던 문구가
+## 세션 복귀 시도에도 그대로 붙어 실패 원인을 가렸다. _connection_retry_label()에
+## _resuming_session 분기를 추가해 세 가지 상황(게임 도중 재접속/세션
+## 복귀/진짜 첫 접속)에 각각 다른 안내가 나가게 정리했다.
 func _on_connection_failed(reason: String) -> void:
 	if _reconnect_backoff.has_attempts_left():
 		var attempt_no := _reconnect_backoff.attempt + 1
 		var delay := _reconnect_backoff.next_delay_sec()
-		var label := "게임 도중 재접속 시도 중" if _reconnecting_after_disconnect else "서버를 깨우는 중입니다(최대 1분)"
-		var status_text := "%s - 재시도 %d/%d, %.0f초 후" % [label, attempt_no, NetProtocol.MAX_RECONNECT_ATTEMPTS, delay]
+		var status_text := "%s - 재시도 %d/%d, %.0f초 후" % [_connection_retry_label(), attempt_no, NetProtocol.MAX_RECONNECT_ATTEMPTS, delay]
 		_connect_status_label.text = status_text
 		_set_connection_status(status_text)
 		await get_tree().create_timer(delay).timeout
@@ -344,6 +390,15 @@ func _on_connection_failed(reason: String) -> void:
 	if _reconnecting_after_disconnect:
 		_reconnecting_after_disconnect = false
 		reconnect_exhausted.emit()
+	elif _resuming_session:
+		# 예전엔 이 분기가 없어서 _resuming_session이 계속 true로 남고,
+		# 화면은 온라인 화면(연결 패널)에 위 msg만 찍힌 채 조용히
+		# 멈춰 있었다(사용자가 본 증상과 일치) - _on_server_error()의
+		# 세션 복귀 실패 처리와 같은 방식으로 확실히 연결 화면으로
+		# 되돌린다.
+		_resuming_session = false
+		SessionStore.clear()
+		_show_connect_panel()
 
 
 func _on_hello_acknowledged() -> void:
