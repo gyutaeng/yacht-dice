@@ -11,7 +11,9 @@ signal back_requested()
 ## 전환한다. GameClient는 그대로 넘겨준다 - 이 노드(online_screen)는
 ## Screen.GAME으로 바뀌면 visible=false가 될 뿐 트리에서 안 사라지므로
 ## _client(자식 노드)의 _process()는 계속 돌아 패킷을 받는다.
-signal game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile])
+## is_resume: F5 등으로 이미 진행 중이던 게임에 복귀하는 경우 true - Main.gd가
+## 이 값으로 게임 시작 인사 연출을 다시 틀지 말지 정한다(이미 지나간 연출).
+signal game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile], is_resume: bool)
 
 ## [캐릭터 선택] 버튼을 누르면 emit한다 - Main.gd가 1-6의
 ## CharacterSelectScreen을 1인분(configure(1))만 빌려 보여주고, 결과를
@@ -383,16 +385,33 @@ func _on_room_joined(players: Array, my_index: int, reconnect_token: String, pla
 
 	if _resuming_session:
 		_resuming_session = false
+		# 새로고침(F5)으로 앱 자체가 처음부터 다시 뜬 것이므로, _ready()가
+		# 잡아둔 _my_profile은 "내가 고르던 캐릭터"가 아니라 그냥 기본값
+		# (get_selectable_profiles()[0])이다 - 그대로 두면 화면엔 항상
+		# 기본 캐릭터로 보인다. 서버가 room_joined에 실어 보내주는 내 슬롯의
+		# meta.id(끊기기 전에 select_character로 보냈던 그 값)로 로컬
+		# CharacterLibrary에서 같은 캐릭터를 다시 찾아 복원한다 - 이미 내
+		# 컴퓨터에 있는 캐릭터라 네트워크 요청이 필요 없다. 못 찾으면(그
+		# 사이 캐릭터를 지웠거나 시크릿 모드 등) set_my_profile()을 안
+		# 부르고 그대로 둬서 기본 캐릭터로 남는다 - 딱 그 경우에만.
+		var my_id := str(_players.get(_my_index, {}).get("meta", {}).get("id", ""))
+		if not my_id.is_empty():
+			var restored := _find_profile_by_id(my_id)
+			if restored != null:
+				set_my_profile(restored)
+
 		# 로비 종료 흐름은 _on_transferring_started()가 begin()을 이미
 		# 불러뒀지만, 복귀 흐름은 그 이벤트를 다시 못 받으므로(이미 지난
-		# 사건) 여기서 직접 불러 필요한 팩 요청을 시작한다. 방이 아직
-		# TRANSFERRING 단계일 수도 있지만(새로고침 타이밍이 아주 나쁜
+		# 사건) 여기서 직접 불러 필요한 팩 요청을 시작한다 - 위에서 복원한
+		# _my_profile/_my_pack_hash를 그대로 넘기므로, 남들이 나와 같은
+		# 캐릭터를 골랐으면 그 사람 몫도 네트워크 없이 바로 풀린다. 방이
+		# 아직 TRANSFERRING 단계일 수도 있지만(새로고침 타이밍이 아주 나쁜
 		# 경우), 그 경우도 포함해 "이미 IN_GAME"으로 간주하고 곧장 게임
 		# 화면 진입 절차를 탄다 - 극히 드문 경계 상황이라 정교하게 나누지
 		# 않는다(그 경우 첫 실제 상태 스냅샷이 도착할 때까지 점수판이
 		# 잠깐 기본값으로 보일 수 있는 정도).
 		_pack_transfer.begin(_my_index, _my_profile, _my_pack_bytes, _my_pack_hash, _players)
-		await _resolve_profiles_and_enter_game(player_count)
+		await _resolve_profiles_and_enter_game(player_count, true)
 		return
 
 	_client.select_character(_my_character_meta())
@@ -417,6 +436,16 @@ func attempt_session_resume(saved: Dictionary) -> void:
 	_pending_action = func() -> void:
 		_client.join_room(_room_code, _my_reconnect_token)
 	_client.connect_to_server(_server_address_edit.text.strip_edges())
+
+
+## 세션 복귀 시 서버가 알려준 내 캐릭터 id로 로컬 CharacterLibrary에서
+## 같은 캐릭터를 다시 찾는다(내장 기본 캐릭터의 id "default" 포함 -
+## get_selectable_profiles()가 그것도 같이 돌려준다). 못 찾으면 null.
+func _find_profile_by_id(id: String) -> CharacterProfile:
+	for profile in CharacterLibrary.get_selectable_profiles():
+		if profile.id == id:
+			return profile
+	return null
 
 
 ## 서버가 최종 검증/기본값 부여를 다시 하므로(server_main.gd, 원칙 6 -
@@ -517,7 +546,7 @@ func _append_transfer_debug_log(text: String) -> void:
 ## 있었다). "게임 화면으로 안 넘어가는 경로는 없다"가 여기서 보장된다.
 func _on_game_started(player_count: int) -> void:
 	print("[온라인] 게임 시작! (%d인)" % player_count)
-	await _resolve_profiles_and_enter_game(player_count)
+	await _resolve_profiles_and_enter_game(player_count, false)
 
 
 ## 로비 종료(_on_game_started)와 세션 복귀(_on_room_joined의 _resuming_session
@@ -527,7 +556,9 @@ func _on_game_started(player_count: int) -> void:
 ## game_play_started를 emit한다. 복귀 흐름은 이 함수를 부르기 전에
 ## _pack_transfer.begin()을 직접 호출해서 필요한 팩 요청을 먼저 시작해둬야
 ## 한다(로비 종료 흐름은 _on_transferring_started()가 이미 해뒀음).
-func _resolve_profiles_and_enter_game(player_count: int) -> void:
+## is_resume은 그대로 game_play_started에 실어 Main.gd에 전달한다 - 복귀
+## 흐름에서는 인사 연출을 다시 틀면 안 된다(이미 지나간 연출).
+func _resolve_profiles_and_enter_game(player_count: int, is_resume: bool) -> void:
 	_game_already_entered = true
 
 	if not _pack_transfer.is_all_resolved():
@@ -552,7 +583,7 @@ func _resolve_profiles_and_enter_game(player_count: int) -> void:
 		profile.display_name = display_name if not display_name.is_empty() else "플레이어 %d" % (i + 1)
 		profiles.append(profile)
 
-	game_play_started.emit(_client, _my_index, profiles)
+	game_play_started.emit(_client, _my_index, profiles, is_resume)
 
 
 ## 사용자 요청 진단(2-5) - "팩은 도착했는데 아무도 안 쓴다"는 증상을 잡기

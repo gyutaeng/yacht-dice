@@ -561,7 +561,9 @@ func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 ## connect()하면 두 번째 판부터 신호가 중복 연결되므로, 먼저 이전 구독을
 ## 확실히 끊고 다시 건다(_disconnect_online_client_signals()는 이미 2-6에서
 ## idempotent하게 만들어둔 헬퍼 - 그대로 재사용).
-func _on_online_game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile]) -> void:
+## is_resume(2-6 후속) - F5 등으로 이미 진행 중이던 게임에 복귀하는
+## 경우다. 이때는 게임 시작 인사를 다시 틀지 않는다(이미 지나간 연출).
+func _on_online_game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile], is_resume: bool) -> void:
 	_disconnect_online_client_signals()
 	_online_client = client
 	_online_client.player_left.connect(_on_online_player_left)
@@ -569,7 +571,7 @@ func _on_online_game_play_started(client: GameClient, my_index: int, profiles: A
 	_online_client.player_timer.connect(_on_online_player_timer)
 
 	var controller := OnlineGameController.new(client, profiles.size(), my_index)
-	_enter_game(controller, profiles, my_index)
+	_enter_game(controller, profiles, my_index, is_resume)
 
 
 ## 2-6(§6) - 다음 온라인 세션을 시작하기 전에(또는 로컬/타이틀로 돌아갈 때)
@@ -650,7 +652,9 @@ func _on_reconnect_exhausted() -> void:
 ## 정하는 유일한 지점). 이 아래는 2-3 이전부터 있던 화면 배선 그대로다 -
 ## Phase 1 연출 코드(VoiceBank/SfxBank/_build_character_area/_build_scoreboard/
 ## 인사 연출)는 한 줄도 안 바뀐다.
-func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = -1) -> void:
+## skip_greeting(2-6 후속) - F5 등으로 이미 진행 중이던 게임에 복귀할 때
+## true - 이미 지나간 인사 연출을 다시 틀지 않는다.
+func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = -1, skip_greeting: bool = false) -> void:
 	_clear_debug_log()
 	_debug_init_log("게임 시작 초기화 시작 (인원 %d명)" % profiles.size())
 	_debug_log_special_hand_subscribers()
@@ -691,8 +695,14 @@ func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = 
 		game_state.start_turn()
 	_debug_init_log("첫 턴 시작 완료 - 초기화 끝")
 
-	_start_greeting_sequence()
-	_debug_init_log("게임 시작 인사 연출 시작")
+	if skip_greeting:
+		# 인사 연출을 아예 안 켜므로, 연출이 "정상 종료"됐을 때 하는 뒷정리
+		# (입력 차단 해제, 지금 턴 플레이어로 초상 맞추기)만 그대로 재사용한다.
+		_on_greeting_sequence_finished()
+		_debug_init_log("게임 복귀 - 인사 연출 건너뜀")
+	else:
+		_start_greeting_sequence()
+		_debug_init_log("게임 시작 인사 연출 시작")
 
 
 func _clear_dynamic_nodes() -> void:

@@ -173,6 +173,16 @@ func _advance_greeting() -> void:
 	if _greeting_skip_requested or _greeting_step_index >= _player_profiles.size():
 		_greeting_active = false
 		greeting_sequence_finished.emit()
+		# 인사 중 도착한 요청(온라인 첫 턴의 turn_started 등 - 우선순위가
+		# 인사보다 낮아 대기열에만 들어가고 재생은 못 됨)이 있으면 여기서
+		# 마저 처리한다. 실제 발견된 버그: _on_slot_finished()가 인사
+		# 단계에서는 이 함수를 안 부르고 곧장 return해서, 인사가 끝나도
+		# 아무도 이 대기를 다시 봐주지 않았다 - 대기가 영원히 안 풀리면서
+		# 그 우선순위 이하의 다음 요청까지 계속 밀어내는(교체 조건이
+		# "엄격히 더 높을 때"뿐이라) 연쇄 문제로 이어질 수 있었다. 이미
+		# 1.5초를 넘겼으면(2명 이상 인사만 해도 훌쩍 넘김) 여기서도 그냥
+		# 버려지지만, 최소한 대기 슬롯 자체는 확실히 비워진다.
+		_try_play_pending()
 		return
 
 	var p := _greeting_step_index
@@ -362,6 +372,8 @@ func _play_for_player(player_index: int, event_key: String) -> bool:
 		return false
 
 	var priority: int = _event_priority.get(event_key, 0)
+	if BuildInfo.DEBUG_MODE:
+		print("[VoiceBank] 요청: player=%d key=%s file=%s priority=%d" % [player_index, event_key, filename, priority])
 	_request_voice(player_index, event_key, priority, stream)
 	return true
 
@@ -372,14 +384,20 @@ func _play_for_player(player_index: int, event_key: String) -> bool:
 ## 하나뿐 - 기존 대기보다 우선순위가 높을 때만 교체).
 func _request_voice(player_index: int, event_key: String, priority: int, stream: AudioStream) -> void:
 	if _global_active_player == -1:
+		if BuildInfo.DEBUG_MODE:
+			print("[VoiceBank] 즉시 재생: player=%d key=%s" % [player_index, event_key])
 		_start_playing_stream(player_index, stream, priority)
 		return
 
 	if priority > _global_active_priority:
+		if BuildInfo.DEBUG_MODE:
+			print("[VoiceBank] 교체 재생(우선순위 %d > %d): player=%d key=%s" % [priority, _global_active_priority, player_index, event_key])
 		_preempt_and_play(player_index, priority, stream)
 		return
 
 	if _pending_request.is_empty() or priority > _pending_request["priority"]:
+		if BuildInfo.DEBUG_MODE:
+			print("[VoiceBank] 대기열에 넣음: player=%d key=%s priority=%d(재생 중=%d, 우선순위 %d)" % [player_index, event_key, priority, _global_active_player, _global_active_priority])
 		_pending_request = {
 			"player": player_index,
 			"event_key": event_key,
@@ -387,6 +405,8 @@ func _request_voice(player_index: int, event_key: String, priority: int, stream:
 			"stream": stream,
 			"queued_at_msec": Time.get_ticks_msec(),
 		}
+	elif BuildInfo.DEBUG_MODE:
+		print("[VoiceBank] 무시됨(대기 중인 것보다 우선순위 안 높음): player=%d key=%s priority=%d" % [player_index, event_key, priority])
 
 
 ## 재생 중이던 슬롯(old_player_index = 지금까지의 _global_active_player)을
@@ -445,7 +465,9 @@ func _try_play_pending() -> void:
 	var age_msec: int = Time.get_ticks_msec() - request["queued_at_msec"]
 	if age_msec > VOICE_WAIT_TIMEOUT_MSEC:
 		if BuildInfo.DEBUG_MODE:
-			print("[VoiceBank] %s 대기 %.1f초 초과로 버림" % [request["event_key"], age_msec / 1000.0])
+			print("[VoiceBank] %s 대기 %.1f초 초과로 버림(player=%d)" % [request["event_key"], age_msec / 1000.0, request["player"]])
 		return
 
+	if BuildInfo.DEBUG_MODE:
+		print("[VoiceBank] 대기열에서 이어서 재생: player=%d key=%s" % [request["player"], request["event_key"]])
 	_start_playing_stream(request["player"], request["stream"], request["priority"])
