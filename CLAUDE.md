@@ -1856,10 +1856,34 @@ margin 계산 자체가 오설정에서 영원히 거짓이 될 수 있다는 �
   `OS.set_environment()`로 실제 프로세스 환경변수를 조작해 4단계
   우선순위 전부 확인. 덤으로 바인딩 주소(`create_server()`가 `"*"`
   기본값 사용 - Render의 0.0.0.0 요구사항 이미 충족)도 확인 완료.
-- **현재 막힘**: 이 컴퓨터에 **Docker와 GitHub CLI(`gh`) 둘 다 설치돼
-  있지 않음**(2026-09-16, PowerShell/Git Bash 양쪽 확인) - 단계 0(저장소
-  생성)과 단계 3(Dockerfile 로컬 실행)이 이것 때문에 막혀 있다. 사용자의
-  설치 또는 수동 진행(GitHub 웹 UI로 직접 저장소 생성 등)이 필요.
+- **단계 0(비공개 저장소 준비) 완료**: `gh` CLI를 winget으로 설치하고
+  사용자가 직접 `gh auth login`을 완료한 뒤(브라우저 인증이 필요해
+  대화형으로 진행), `https://github.com/gyutaeng/yacht-dice`(private)를
+  만들어 `origin`으로 연결했다. 이 로컬 저장소엔 원격이 아예 없던
+  상태였다(`main`은 오래된 커밋에 멈춰 있었음). 사용자 결정으로
+  `step/1-5-file-picker`(v0.3-online + 이번 세션 전부 포함, 최신 상태)를
+  `main`으로 fast-forward 병합해서 push - **Render는 앞으로 `main`을
+  배포 기준으로 본다.** 위 "확정 2/3 후속 2" 절까지의 변경사항을 커밋
+  하나(`친구 대상 실제 베타 테스트 후속 일괄 반영 + 2-7 착수 준비`)로
+  묶었다.
+- **Docker Desktop 설치 완료**: winget 자동 설치는 관리자 권한 승인(UAC)에
+  막혀 실패했지만(2026-09-16), 이 컴퓨터에 WSL2 자체가 없던 게 더 근본
+  원인이었다(`wsl --status`가 "설치 안 됨") - 사용자가 직접 `wsl --install`
+  + 재부팅으로 WSL2를 설치한 뒤 Docker Desktop이 정상적으로 뜸(`docker run
+  hello-world` 확인).
+- **단계 3(Dockerfile) 완료**: `Dockerfile`/`.dockerignore` 작성 후 실제
+  `docker build`+`docker run`으로 로컬 검증까지 마쳤다. 막혔다가 고친
+  문제 하나 - 로컬 에디터가 오래 쌓아둔 `.godot/imported/` 캐시 덕에
+  안 보이던 문제인데, 깨끗한 컨테이너는 이 캐시가 없어서 순수
+  `--headless` 실행이 폰트/스크립트 파싱 에러로 죽었다(1-8 사전 작업
+  때 이미 겪은 것과 같은 원인). `RUN godot --headless --editor
+  --quit-after 60 --path /app`로 이미지 빌드 시점에 임포트를 강제해서
+  해결. 컨테이너가 정상적으로 뜨는 것(로컬과 동일한 로그), PORT
+  환경변수가 실제 컨테이너에서도 반영되는 것(`-e PORT=9999` → 로그에
+  "포트 9999"), TCP 연결은 되지만 평범한 HTTP엔 응답 안 하는 것
+  (WebSocket 전용 서버라 정상 - 다음 단계 헬스체크 확인의 배경)까지
+  전부 확인했다. 자세한 내용은 `docs/deployment_checklist.md` "2-7 사전
+  조사 §3/§3.5" 참고.
 
 전체 909개 테스트 통과.
 
