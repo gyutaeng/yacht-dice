@@ -971,7 +971,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   `BuildInfo.DEBUG_MODE`에 묶어 넣은 진단 로그들뿐이었다 - 정작 베타 중에
   가장 필요할 로그가 배포하면서 꺼지는 셈이었다. 셋 다 무조건 출력으로
   되돌렸다.
-- **export 프리셋을 `Web (개발)`/`Web (배포)` 둘로 분리**
+- **export 프리셋을 `Web (dev)`/`Web (release)` 둘로 분리**
   (`export_presets.cfg`) - 후자에만 `custom_features="yd_release"` 태그를
   달았다. `build_info.gd`의 `DEBUG_MODE`를 `const := true`에서
   `static var DEBUG_MODE: bool = not OS.has_feature("yd_release")`로
@@ -988,7 +988,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   런타임 계산 값으로 바꾼 것뿐).
 
 ### 베타 배포 준비 후속 - 실제 웹 빌드로 재검증 + export 경로 완전 분리
-위 항목 배포 직후 사용자가 실제로 `Web (배포)`를 export했는데 빌드
+위 항목 배포 직후 사용자가 실제로 `Web (release)`를 export했는데 빌드
 배너에 "디버그 켜짐"이 떴다고 보고 - "네이티브(Windows)로만 검증하고
 웹에서만 나는 문제를 놓쳤을 수 있다"는 지적을 받아 다시 조사했다.
 
@@ -997,9 +997,9 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   즉시 dump-dom)은 fetch/WASM 컴파일 같은 비동기 작업을 못 기다려서
   신뢰할 수 없었다 - **CDP(Chrome DevTools Protocol)로 헤드리스
   Edge를 직접 띄워 진짜 wall-clock 시간을 기다리는 방식**으로 바꿔서
-  `Web (개발)`/`Web (배포)`(release/debug 두 export 템플릿 다) 전부
+  `Web (dev)`/`Web (release)`(release/debug 두 export 템플릿 다) 전부
   재확인했다. 결과: 메커니즘 자체는 웹에서도 정확히 동작함을 확인
-  (`Web (개발)` → "디버그 켜짐", `Web (배포)` → "디버그 꺼짐").
+  (`Web (dev)` → "디버그 켜짐", `Web (release)` → "디버그 꺼짐").
 - **진짜 원인은 다른 데 있었다 - 에디터 GUI export는 메모리 상태가
   디스크와 어긋날 수 있다.** `export_presets.cfg` 자체는 (당시에도)
   정상이었다(`custom_features="yd_release"`가 그대로 있었음). 그런데도
@@ -1012,14 +1012,14 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - **export 경로를 완전히 분리**(사용자 요청 - GitHub Pages 저장소가
   `F:/Godot/web_build`인데 개발 중 테스트도 같은 폴더에 export하고 있어서,
   실수로 개발 빌드를 그 저장소에 커밋해 배포해버릴 경로가 있었다):
-  `Web (개발)` → `F:/Godot/web_dev`(git과 무관, 평소 개발 테스트용),
-  `Web (배포)` → `F:/Godot/web_build`(GitHub Pages 저장소 - **여기 안에는
+  `Web (dev)` → `F:/Godot/web_dev`(git과 무관, 평소 개발 테스트용),
+  `Web (release)` → `F:/Godot/web_build`(GitHub Pages 저장소 - **여기 안에는
   항상 배포 빌드만 있다는 게 폴더가 다르다는 사실만으로 구조적으로
   보장됨**). `F:/Godot/web_open`(이전에 쓰던 임시 경로)은 이제 안 씀 -
   정리 대상.
 - **`F:\Godot\build_release.bat` 추가**(`run_server.bat`과 같은 자리,
   같은 스타일) - Godot exe 전체 경로 + `--path`로 프로젝트 지정 +
-  `--export-release "Web (배포)"` + 끝에 `pause`. 매번 긴 CLI 명령을 손으로
+  `--export-release "Web (release)"` + 끝에 `pause`. 매번 긴 CLI 명령을 손으로
   치는 대신 더블클릭 한 번으로 배포 빌드를 만든다.
 
 ### 2-6 후속 - 재접속 유예를 2분 → 60초로 단축(턴 제한과 같은 값)
@@ -1057,6 +1057,42 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   게임이 이미 끝난 뒤라 게임 도중 끊김만큼 급하지 않다"는 별도 근거로
   바꿨다(`scripts/net/protocol.gd`/`docs/multiplayer.md` 양쪽).
 - 새 테스트 포함 전체 849개 통과.
+
+### 베타 배포 준비 후속 2 - build_release.bat 인코딩 깨짐 수정 + 프리셋 이름 영문화
+사용자가 `build_release.bat`을 실제로 실행하니 콘솔이 한글 대신
+`諛고룷 鍮뚮뱶 ?ㅽ뙣` 같은 깨진 글자를 찍고, 심하면 `'--headless'은(는)
+내부 또는 외부 명령...이 아닙니다`처럼 명령줄 구조 자체가 깨졌다.
+
+- **원인 두 가지를 같이 없앴다** - ① `export_presets.cfg`의 프리셋
+  이름 `"Web (개발)"`/`"Web (배포)"`에 한글이 들어있어서, cmd.exe의
+  콘솔 코드페이지가 안 맞으면 `--export-release`에 넘기는 그 이름 자체가
+  깨져 Godot이 프리셋을 못 찾을 수 있었다. ② 배치 파일 자체도 파일을
+  쓴 도구가 LF만 남긴 상태였는데(cmd.exe는 CRLF를 기대), `if (...) else
+  (...)` 괄호 블록은 특히 줄바꿈에 약해서 인코딩/개행 문제가 겹치면
+  블록 파싱 자체가 깨질 수 있었다.
+- **프리셋 이름을 영문으로 변경**: `"Web (개발)"` → `"Web (dev)"`,
+  `"Web (배포)"` → `"Web (release)"`(`export_presets.cfg`, 에디터
+  닫힌 상태에서 수정). 코드/문서의 모든 참조(`CLAUDE.md`,
+  `build_info.gd`, `docs/deployment_checklist.md`, `docs/web_export.md`,
+  `.gitignore`)를 새 이름으로 맞췄다.
+- **`build_release.bat`을 다시 씀**: 안내 문구를 전부 ASCII 영문으로
+  바꾸고(`unix2dos`로 CRLF 강제), `if errorlevel 1 goto FAIL` +
+  `:FAIL`/`:END` 레이블 방식으로 바꿔서 괄호 블록을 없앴다.
+- **실제로 두 경로 다 실행해서 확인함**(파일만 쓰고 넘기지 않음,
+  사용자 요청) - 성공 경로(`cmd /c "echo. | build_release.bat"`로
+  끝의 `pause`에 자동으로 엔터를 흘려보냄)는 `Release build done ->
+  F:/Godot/web_build/`가 안 깨지고 찍히는 것까지 확인. 실패 경로는
+  존재하지 않는 프리셋 이름으로 임시 배치 파일을 하나 더 만들어(확인
+  후 삭제) 돌려봤고, `Release build FAILED - check the error messages
+  above.`가 마찬가지로 안 깨지고 찍히는 것과 Godot 에러 메시지가 실제
+  프리셋 이름(`"Web (dev)"`/`"Web (release)"`)을 정확히 나열해주는 것도
+  확인했다.
+- **실제로 겪은 사고와 복구**: 확인 과정에서 `F:/Godot/web_build`(사용자가
+  이미 만들어둔 실제 GitHub Pages git 저장소)의 `index.html`/`index.pck`를
+  실수로 `rm`으로 지웠다 - 둘 다 커밋된 파일이라 `git restore`로 즉시
+  복구했고 데이터 손실은 없었다. 이 폴더가 이제 진짜 git 저장소라는 걸
+  스크린샷 대신 명령 결과로 마주친 뒤로는 그 안에서 삭제성 명령을 다시
+  쓰지 않기로 했다 - export(덮어쓰기)만 쓴다.
 
 ### (구) 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 **위 항목으로 대체됨 - 더 이상 이 상수를 손으로 고치지 않는다.** 아래는

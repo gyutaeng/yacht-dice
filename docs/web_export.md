@@ -18,12 +18,12 @@ Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > 
 
 `export_presets.cfg`에 이미 구성돼 있고 저장소에 커밋되어 있다(민감한 값이 생기기 전까지는 커밋 대상 — 안드로이드 키스토어 등이 생기면 그때 다시 논의). 핵심 값:
 
-- **`export_path`는 반드시 프로젝트 폴더 바깥**: `Web (개발)` → `F:/Godot/web_dev/index.html`, `Web (배포)` → `F:/Godot/web_build/index.html`. 프로젝트 안(`res://build/` 등)에 두면 열려 있는 Godot 에디터가 export된 PNG(`index.png`, `index.icon.png` 등)를 새 리소스로 인식해서 다시 임포트하고 `.import` 파일을 만든다. 그러면 *다음* export의 pck에 그 리소스가 또 들어가는 악순환이 생긴다 — 실제로 한 번 겪고 `build/` 폴더를 통째로 지운 적 있다. 절대 프로젝트 안의 경로로 바꾸지 말 것.
+- **`export_path`는 반드시 프로젝트 폴더 바깥**: `Web (dev)` → `F:/Godot/web_dev/index.html`, `Web (release)` → `F:/Godot/web_build/index.html`. 프로젝트 안(`res://build/` 등)에 두면 열려 있는 Godot 에디터가 export된 PNG(`index.png`, `index.icon.png` 등)를 새 리소스로 인식해서 다시 임포트하고 `.import` 파일을 만든다. 그러면 *다음* export의 pck에 그 리소스가 또 들어가는 악순환이 생긴다 — 실제로 한 번 겪고 `build/` 폴더를 통째로 지운 적 있다. 절대 프로젝트 안의 경로로 바꾸지 말 것.
 - **두 경로를 분리한 이유(사용자 지적)**: `F:/Godot/web_build`는 GitHub
   Pages로 서빙되는 **별도의 git 저장소**다(이 프로젝트의 git과 무관).
   예전엔 개발 중 테스트도 이 폴더에 export했는데, 그러면 손으로 계속
-  뭘 하다가 실수로 개발 빌드(`Web (개발)`, DEBUG_MODE 켜짐)를 커밋해서
-  GitHub Pages에 올려버릴 여지가 있었다. `Web (개발)`의 export_path를
+  뭘 하다가 실수로 개발 빌드(`Web (dev)`, DEBUG_MODE 켜짐)를 커밋해서
+  GitHub Pages에 올려버릴 여지가 있었다. `Web (dev)`의 export_path를
   git과 무관한 `F:/Godot/web_dev`로 완전히 분리해서, **`web_build` 안에는
   항상 배포 빌드만 있다는 게 구조적으로 보장**되게 했다 - "손으로
   기억해서 안 섞기"가 아니라 애초에 섞을 경로 자체가 없다.
@@ -32,8 +32,8 @@ Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > 
 
 ## DEBUG_MODE 자동 전환 (베타 배포 후 추가)
 
-`export_presets.cfg`에 웹 프리셋이 **두 개** 있다 - `Web (개발)`
-(`custom_features=""`)과 `Web (배포)`(`custom_features="yd_release"`).
+`export_presets.cfg`에 웹 프리셋이 **두 개** 있다 - `Web (dev)`
+(`custom_features=""`)과 `Web (release)`(`custom_features="yd_release"`).
 `build_info.gd`의 `DEBUG_MODE`는 더 이상 손으로 켜고 끄는 상수가 아니라
 `not OS.has_feature("yd_release")`로 계산되는 값이라, **어느 프리셋으로
 export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊고 배포"
@@ -50,13 +50,13 @@ export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊�
   추가)**: 네이티브 검증만으로는 부족하다는 지적을 받았다 - 이 프로젝트는
   실제로 "네이티브끼리만 검증해서 웹에서만 나는 문제를 놓친" 전례
   (2-5의 WebSocket 수신 버퍼 문제, §8.5-6)가 있다. 그래서 실제로
-  `Web (개발)`/`Web (배포)` 두 프리셋을 CLI로 export하고, **헤드리스
+  `Web (dev)`/`Web (release)` 두 프리셋을 CLI로 export하고, **헤드리스
   Edge(Chromium)를 CDP(Chrome DevTools Protocol)로 직접 띄워 실제
   브라우저에서 WASM을 실행**시킨 뒤 콘솔 로그와 빌드 배너 DOM 값을
   읽어 확인했다(처음 시도한 `--virtual-time-budget` 방식은 실제 fetch/WASM
   컴파일 같은 비동기 작업을 다 못 기다리고 너무 일찍 끊겨서 신뢰할 수
   없었다 - CDP로 진짜 wall-clock 시간을 기다리는 방식으로 교체). 결과:
-  `Web (개발)` → 배너 "디버그 켜짐", `Web (배포)`(release/debug 두
+  `Web (dev)` → 배너 "디버그 켜짐", `Web (release)`(release/debug 두
   export 템플릿 다) → 배너 "디버그 꺼짐" - 실제 웹/WASM 런타임에서도
   메커니즘이 정확히 동작함을 확인했다. 검증용 프리셋/스크립트/서버는
   확인 후 전부 지워서 저장소에 안 남는다.
@@ -68,7 +68,7 @@ export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊�
 - **런타임 확인**: 게임이 시작될 때 찍히는 빌드 배너(아래 "빌드 식별")
   자체에 `디버그 켜짐`/`디버그 꺼짐`이 같이 찍힌다 - 상수 값을 눈으로
   믿는 대신 실제로 그 빌드에 구워진 값을 화면에서 바로 확인한다.
-- **⚠️ `Web (배포)` export는 반드시 CLI로 한다, 에디터 GUI로 하지
+- **⚠️ `Web (release)` export는 반드시 CLI로 한다, 에디터 GUI로 하지
   않는다(실제로 겪음)** - `export_presets.cfg` 자체는 정상이었는데
   (`custom_features="yd_release"`가 그대로 있었음) 에디터 GUI로 export한
   빌드에서 태그가 안 먹힌 적이 있었다. 원인은 메커니즘 자체가 아니라
@@ -100,8 +100,8 @@ python -m http.server 8060
 1. 확인하려는 씬이 `project.godot`의 `run/main_scene`으로 지정돼 있는지 확인한다.
 2. 내보내기:
    - 에디터 GUI: `프로젝트 > 내보내기` → Web 프리셋 → 내보내기(Export Project).
-   - CLI: `godot --headless --export-release "Web (개발)" "F:/Godot/web_dev/index.html"`.
-     베타/정식 배포용 빌드는 `"Web (배포)"` 프리셋으로
+   - CLI: `godot --headless --export-release "Web (dev)" "F:/Godot/web_dev/index.html"`.
+     베타/정식 배포용 빌드는 `"Web (release)"` 프리셋으로
      `F:/Godot/web_build/index.html`에 export한다(`F:\Godot\build_release.bat`
      더블클릭으로도 가능 - 아래 "DEBUG_MODE 자동 전환" 참고,
      `docs/deployment_checklist.md`에 절차 있음).

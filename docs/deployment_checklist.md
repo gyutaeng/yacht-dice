@@ -14,9 +14,9 @@ export 프리셋을 선택하느냐가 DEBUG_MODE를 자동으로 결정한다**
 
 `export_presets.cfg`에 웹 프리셋이 두 개 있다:
 
-- **`Web (개발)`** - `custom_features=""`. DEBUG_MODE가 켜진 채로
+- **`Web (dev)`** - `custom_features=""`. DEBUG_MODE가 켜진 채로
   나온다(디버그 단축키/버튼/화면 로그 전부 보임). 평소 개발 중 확인용.
-- **`Web (배포)`** - `custom_features="yd_release"`. 이 태그가 있으면
+- **`Web (release)`** - `custom_features="yd_release"`. 이 태그가 있으면
   `build_info.gd`의 `DEBUG_MODE`가 자동으로 `false`가 된다. **베타/정식
   배포는 반드시 이 프리셋으로 export한다.** export_path는
   `F:/Godot/web_build/index.html`로 고정되어 있다 - **이 폴더가 곧
@@ -28,7 +28,7 @@ export 프리셋을 선택하느냐가 DEBUG_MODE를 자동으로 결정한다**
 (아래 참고). 직접 CLI로 하려면:
 
 ```
-"F:\Godot\Godot_v4.7.2-stable_win64.exe" --headless --path "F:\Godot\Project\yacht-dice" --export-release "Web (배포)" "F:/Godot/web_build/index.html"
+"F:\Godot\Godot_v4.7.2-stable_win64.exe" --headless --path "F:\Godot\Project\yacht-dice" --export-release "Web (release)" "F:/Godot/web_build/index.html"
 ```
 
 export가 끝나면 콘솔에 `BuildStamp: 배포용 빌드(yd_release 태그 있음) -
@@ -47,7 +47,7 @@ DEBUG_MODE 꺼짐`이 찍힌다(`addons/build_stamp`가 export 시점에 바로
 상태 그대로 빌드가 나온다. CLI(`--headless --export-release`)는 그
 순간 파일을 새로 읽어서 export하므로 이런 어긋남 자체가 생기지 않는다 -
 **베타/정식 배포처럼 정확성이 중요한 export는 항상 CLI만 쓴다.**
-개발 중 화면을 눈으로 보는 `Web (개발)` export는 GUI로 해도 상관없다
+개발 중 화면을 눈으로 보는 `Web (dev)` export는 GUI로 해도 상관없다
 (디버그가 켜진 채로 나오는 게 기본값이라 위험이 없음).
 
 ## 2. 전체 테스트 통과 확인
@@ -86,10 +86,10 @@ git 상태다 - 아래 5번의 `F:/Godot/web_build`는 완전히 별도의 git �
 안에서 따로 커밋하고 푸시해야 한다(이 프로젝트의 git 작업과는 다른
 저장소이므로 여기서 자동으로 처리해주지 않는다).
 
-## 참고 - DEBUG_MODE가 꺼지면(`Web (배포)`로 export하면) 사라지는 것
+## 참고 - DEBUG_MODE가 꺼지면(`Web (release)`로 export하면) 사라지는 것
 
 베타 테스터에게 "이게 왜 안 보이지"라는 질문을 받지 않으려면 미리
-알아둘 것 - 아래는 전부 `Web (개발)`에는 있고 `Web (배포)`에는 없다.
+알아둘 것 - 아래는 전부 `Web (dev)`에는 있고 `Web (release)`에는 없다.
 
 - `scripts/dev/debug_hotkeys.gd`의 Ctrl+Shift+숫자/S/A 키보드 단축키
   (주사위를 원하는 족보로 강제 지정, 한 칸 확정, 게임 자동 진행)
