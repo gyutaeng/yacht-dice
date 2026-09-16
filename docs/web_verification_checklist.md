@@ -1,6 +1,7 @@
 # Phase 1 마감 전 웹 전체 점검 체크리스트
 
-`docs/web_export.md`의 절차대로 export → `F:/Godot/web_build` → 정적 서버로
+`docs/web_export.md`의 절차대로 export → `F:/Godot/web_dev`(개발용 - 배포용
+`F:/Godot/web_build`와 분리됨, 아래 참고) → 정적 서버로
 서빙해서 확인한다(에디터의 "브라우저에서 실행"은 쓰지 않는다). 문제를
 발견하면 어떤 항목에서, 어떤 브라우저/콘솔 로그와 함께 났는지 메모해두면
 고칠 때 빠르다.

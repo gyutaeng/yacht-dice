@@ -38,7 +38,7 @@ enum TransferState { COLLECTING, TRANSFERRING_PACK, AWAITING_READY, DONE }
 const RECONNECT_TOKEN_BYTES := 24
 
 # 2-6(연결 끊김/재접속, docs/multiplayer.md §6) - 슬롯 하나의 연결 상태.
-# CONNECTED: 정상. GRACE_PERIOD: 끊겼지만 재접속 유예(2분) 안 - peer_id는
+# CONNECTED: 정상. GRACE_PERIOD: 끊겼지만 재접속 유예(NetProtocol.RECONNECT_GRACE_MSEC) 안 - peer_id는
 # -1이지만 meta/reconnect_token은 그대로 남아있어 같은 토큰으로 돌아오면
 # 복귀할 수 있다. PAST_GRACE: 유예가 끝나 "확정 이탈"로 넘어감(그때부터
 # 매턴 즉시 자동 처리) - 그래도 같은 토큰이면 나중에 다시 돌아올 수 있다

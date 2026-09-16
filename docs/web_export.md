@@ -8,7 +8,7 @@
 
 Godot 에디터 상단의 "브라우저에서 실행"(웹 플랫폼을 실행 대상으로 골랐을 때 나오는 재생 버튼)은 **쓰지 않는다.** 이건 임시 폴더에 디버그 빌드를 내보내고 에디터 내장 서버로 서빙하는 완전히 별도의 경로라서, 이 문서에 정리된 export 설정(`export_presets.cfg`의 `html/head_include`, `addons/build_stamp` 플러그인 등)이 똑같이 적용되는지 보장이 안 되고, 실제로 정식 export와 다르게 동작하는 게 확인됐다(게임 진행 자체가 막힘 — 정식 export로는 똑같은 상황에서 정상 동작). 왜 다르게 동작하는지는 파고들지 않기로 했다.
 
-**웹 테스트는 항상 아래 절차(export → `F:/Godot/web_build` → `python -m http.server`)만 쓴다.**
+**웹 테스트는 항상 아래 절차(export → `F:/Godot/web_dev` → `python -m http.server`)만 쓴다.** (`F:/Godot/web_dev`는 개발용이다 - 배포용 `F:/Godot/web_build`와 분리된 이유는 아래 "Web 프리셋 설정" 참고.)
 
 ## 사전 준비: export template 설치
 
@@ -18,7 +18,15 @@ Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > 
 
 `export_presets.cfg`에 이미 구성돼 있고 저장소에 커밋되어 있다(민감한 값이 생기기 전까지는 커밋 대상 — 안드로이드 키스토어 등이 생기면 그때 다시 논의). 핵심 값:
 
-- **`export_path`는 반드시 프로젝트 폴더 바깥**: `F:/Godot/web_build/index.html`. 프로젝트 안(`res://build/` 등)에 두면 열려 있는 Godot 에디터가 export된 PNG(`index.png`, `index.icon.png` 등)를 새 리소스로 인식해서 다시 임포트하고 `.import` 파일을 만든다. 그러면 *다음* export의 pck에 그 리소스가 또 들어가는 악순환이 생긴다 — 실제로 한 번 겪고 `build/` 폴더를 통째로 지운 적 있다. 절대 프로젝트 안의 경로로 바꾸지 말 것.
+- **`export_path`는 반드시 프로젝트 폴더 바깥**: `Web (개발)` → `F:/Godot/web_dev/index.html`, `Web (배포)` → `F:/Godot/web_build/index.html`. 프로젝트 안(`res://build/` 등)에 두면 열려 있는 Godot 에디터가 export된 PNG(`index.png`, `index.icon.png` 등)를 새 리소스로 인식해서 다시 임포트하고 `.import` 파일을 만든다. 그러면 *다음* export의 pck에 그 리소스가 또 들어가는 악순환이 생긴다 — 실제로 한 번 겪고 `build/` 폴더를 통째로 지운 적 있다. 절대 프로젝트 안의 경로로 바꾸지 말 것.
+- **두 경로를 분리한 이유(사용자 지적)**: `F:/Godot/web_build`는 GitHub
+  Pages로 서빙되는 **별도의 git 저장소**다(이 프로젝트의 git과 무관).
+  예전엔 개발 중 테스트도 이 폴더에 export했는데, 그러면 손으로 계속
+  뭘 하다가 실수로 개발 빌드(`Web (개발)`, DEBUG_MODE 켜짐)를 커밋해서
+  GitHub Pages에 올려버릴 여지가 있었다. `Web (개발)`의 export_path를
+  git과 무관한 `F:/Godot/web_dev`로 완전히 분리해서, **`web_build` 안에는
+  항상 배포 빌드만 있다는 게 구조적으로 보장**되게 했다 - "손으로
+  기억해서 안 섞기"가 아니라 애초에 섞을 경로 자체가 없다.
 - **`variant/thread_support=false`**: 저장소에서 실제 `Thread`를 쓰는 곳은 `FilePickerDesktop` 하나뿐이고, `FilePicker.create()`는 웹에서 `FilePickerWeb`을 골라 그 코드 자체가 실행되지 않는다(`AssetLoader`/`VoiceBank`/`SfxBank`도 전부 동기 코드). Thread Support를 켜면 COOP/COEP 헤더가 필요해져 정적 파일 서버 설정만 복잡해지므로 끈 채로 둔다.
 - `html/head_include`: 엔진이 뜨기 전에 실행되는 진단용 스크립트(아래 "빌드 식별" 참고).
 
@@ -31,17 +39,27 @@ Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > 
 export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊고 배포"
 사고 자체가 구조적으로 안 생긴다.
 
-- **왜 가능한지 실제로 확인한 방법**: 임시 Windows Desktop 프리셋에
-  `custom_features="yd_test_tag"`를 달아 export한 뒤, 그 실행 파일이
-  `OS.has_feature("yd_test_tag")`를 `true`로 돌려주는지, 반대로 에디터에서
-  같은 씬을 그냥 실행했을 때는 `false`인지 직접 실행해서 확인했다
-  (`godot --headless res://...tscn`으로 직접 실행 vs
-  `--export-release`로 내보낸 뒤 그 바이너리를 실행 - 전자는 시종일관
-  `false`, 후자만 `true`). Custom Features 태그는 **실제 export에서만
-  바이너리에 구워지고, 에디터의 "실행" 버튼에는 절대 안 붙는다**는 게
-  이걸로 확정됐다 - 그래서 "에디터에서는 항상 디버그가 켜져 있어야
-  한다"는 요구사항이 코드를 안 갈라도 저절로 만족된다. 검증용 프리셋/
-  씬은 확인 후 전부 지워서 저장소에 안 남는다.
+- **왜 가능한지 실제로 확인한 방법(1차 - 네이티브)**: 임시 Windows
+  Desktop 프리셋에 `custom_features="yd_test_tag"`를 달아 export한 뒤,
+  그 실행 파일이 `OS.has_feature("yd_test_tag")`를 `true`로 돌려주는지,
+  반대로 에디터에서 같은 씬을 그냥 실행했을 때는 `false`인지 직접
+  실행해서 확인했다 - 전자는 시종일관 `false`, 후자(export한 바이너리)만
+  `true`. Custom Features 태그는 실제 export에서만 바이너리에 구워지고
+  에디터의 "실행" 버튼에는 절대 안 붙는다는 게 이걸로 확정됐다.
+- **왜 가능한지 실제로 확인한 방법(2차 - 실제 웹 빌드, 사용자 지적으로
+  추가)**: 네이티브 검증만으로는 부족하다는 지적을 받았다 - 이 프로젝트는
+  실제로 "네이티브끼리만 검증해서 웹에서만 나는 문제를 놓친" 전례
+  (2-5의 WebSocket 수신 버퍼 문제, §8.5-6)가 있다. 그래서 실제로
+  `Web (개발)`/`Web (배포)` 두 프리셋을 CLI로 export하고, **헤드리스
+  Edge(Chromium)를 CDP(Chrome DevTools Protocol)로 직접 띄워 실제
+  브라우저에서 WASM을 실행**시킨 뒤 콘솔 로그와 빌드 배너 DOM 값을
+  읽어 확인했다(처음 시도한 `--virtual-time-budget` 방식은 실제 fetch/WASM
+  컴파일 같은 비동기 작업을 다 못 기다리고 너무 일찍 끊겨서 신뢰할 수
+  없었다 - CDP로 진짜 wall-clock 시간을 기다리는 방식으로 교체). 결과:
+  `Web (개발)` → 배너 "디버그 켜짐", `Web (배포)`(release/debug 두
+  export 템플릿 다) → 배너 "디버그 꺼짐" - 실제 웹/WASM 런타임에서도
+  메커니즘이 정확히 동작함을 확인했다. 검증용 프리셋/스크립트/서버는
+  확인 후 전부 지워서 저장소에 안 남는다.
 - **export 시점 확인**: `addons/build_stamp`가 export가 시작되는 순간
   콘솔에 `BuildStamp: 배포용 빌드(yd_release 태그 있음) - DEBUG_MODE
   꺼짐` 또는 `개발용 빌드(...) - DEBUG_MODE 켜짐`을 바로 찍어준다 -
@@ -50,6 +68,17 @@ export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊�
 - **런타임 확인**: 게임이 시작될 때 찍히는 빌드 배너(아래 "빌드 식별")
   자체에 `디버그 켜짐`/`디버그 꺼짐`이 같이 찍힌다 - 상수 값을 눈으로
   믿는 대신 실제로 그 빌드에 구워진 값을 화면에서 바로 확인한다.
+- **⚠️ `Web (배포)` export는 반드시 CLI로 한다, 에디터 GUI로 하지
+  않는다(실제로 겪음)** - `export_presets.cfg` 자체는 정상이었는데
+  (`custom_features="yd_release"`가 그대로 있었음) 에디터 GUI로 export한
+  빌드에서 태그가 안 먹힌 적이 있었다. 원인은 메커니즘 자체가 아니라
+  **에디터가 파일을 연 시점의 메모리 상태가 디스크와 어긋나 있으면 GUI
+  export는 그 어긋난 상태로 나간다는 것**(이 프로젝트에서 프리셋 전체가
+  통째로 덮어써진 사고를 이미 한 번 겪었고 - 위 "Web 프리셋 설정" 얘기가
+  아니라 완전히 별개의 실제 사고 - 그보다 작은 단위인 필드 하나가
+  어긋나는 것도 같은 원인 계열이다). CLI(`--headless --export-release`)는
+  그 순간 파일을 새로 읽으므로 이 문제가 원천적으로 없다 - 자세한 절차는
+  `docs/deployment_checklist.md` 참고.
 - **서버(`server_main.gd`) 콘솔 로그는 이 전환과 무관하다** - 서버는 이
   Web 프리셋들과 별개의 headless 바이너리로 항상 따로 돌리고, 서버 쪽
   `print()`는 처음부터 DEBUG_MODE에 안 묶여 있다(운영자가 보는 유일한
@@ -60,7 +89,7 @@ export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊�
 브라우저는 `file://` 프로토콜에서 `fetch()`(Godot의 `.pck`/`.wasm` 로딩이 이걸 씀)를 CORS 정책으로 막는다. 그래서 export한 `index.html`을 더블클릭해서 열면 리소스를 하나도 못 불러오고 조용히 실패하거나 에러만 뜬다. 반드시 정적 파일 서버를 거쳐야 한다:
 
 ```
-cd F:/Godot/web_build
+cd F:/Godot/web_dev
 python -m http.server 8060
 ```
 
@@ -71,9 +100,11 @@ python -m http.server 8060
 1. 확인하려는 씬이 `project.godot`의 `run/main_scene`으로 지정돼 있는지 확인한다.
 2. 내보내기:
    - 에디터 GUI: `프로젝트 > 내보내기` → Web 프리셋 → 내보내기(Export Project).
-   - CLI: `godot --headless --export-release "Web (개발)" "F:/Godot/web_build/index.html"`.
-     베타/정식 배포용 빌드는 `"Web (배포)"` 프리셋을 쓴다(아래 "DEBUG_MODE
-     자동 전환" 참고, `docs/deployment_checklist.md`에 절차 있음).
+   - CLI: `godot --headless --export-release "Web (개발)" "F:/Godot/web_dev/index.html"`.
+     베타/정식 배포용 빌드는 `"Web (배포)"` 프리셋으로
+     `F:/Godot/web_build/index.html`에 export한다(`F:\Godot\build_release.bat`
+     더블클릭으로도 가능 - 아래 "DEBUG_MODE 자동 전환" 참고,
+     `docs/deployment_checklist.md`에 절차 있음).
    - 어느 쪽이든 `addons/build_stamp`가 자동으로 `build_info.gd`에 빌드 시각을 찍는다.
 3. 위 방법으로 로컬 서버를 띄우고 접속한다.
 4. **가장 먼저, 페이지 좌상단 빌드 배너부터 확인한다**(아래 "빌드 식별" 참고) — 이거 없이 테스트를 시작하면 옛날 빌드를 붙잡고 왜 안 되냐며 헤매게 된다. 실제로 여러 세션에 걸쳐 이걸로 시간을 많이 썼다.

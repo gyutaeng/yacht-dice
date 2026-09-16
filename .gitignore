@@ -5,8 +5,10 @@ export.cfg
 # export_presets.cfg는 민감한 값(키스토어 비밀번호 등)이 생기기 전까지는 커밋 대상.
 # 그런 값이 필요해지면 그때 다시 .gitignore로 옮기고 credentials 등으로 분리할 것.
 #
-# 실제 빌드 결과물(export_path)은 프로젝트 폴더 바깥(F:/Godot/web_build/)에
-# 만들어지므로 여기서 따로 무시할 필요가 없다 - 프로젝트 안에 build/ 같은
-# 폴더를 만들면 Godot 에디터가 export한 PNG를 다시 리소스로 임포트해서
-# .import 파일을 만들고, 그게 다음 export의 pck에 또 들어가는 악순환이
-# 생기니 앞으로도 export_path는 항상 프로젝트 바깥으로 잡을 것.
+# 실제 빌드 결과물(export_path)은 프로젝트 폴더 바깥에 만들어지므로 여기서
+# 따로 무시할 필요가 없다 - Web (개발)은 F:/Godot/web_dev/, Web (배포)는
+# F:/Godot/web_build/(별도의 GitHub Pages 저장소 경로 - 이 프로젝트 git과는
+# 무관). 프로젝트 안에 build/ 같은 폴더를 만들면 Godot 에디터가 export한
+# PNG를 다시 리소스로 임포트해서 .import 파일을 만들고, 그게 다음 export의
+# pck에 또 들어가는 악순환이 생기니 앞으로도 export_path는 항상 프로젝트
+# 바깥으로 잡을 것.

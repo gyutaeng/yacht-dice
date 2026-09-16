@@ -18,17 +18,37 @@ export 프리셋을 선택하느냐가 DEBUG_MODE를 자동으로 결정한다**
   나온다(디버그 단축키/버튼/화면 로그 전부 보임). 평소 개발 중 확인용.
 - **`Web (배포)`** - `custom_features="yd_release"`. 이 태그가 있으면
   `build_info.gd`의 `DEBUG_MODE`가 자동으로 `false`가 된다. **베타/정식
-  배포는 반드시 이 프리셋으로 export한다.**
+  배포는 반드시 이 프리셋으로 export한다.** export_path는
+  `F:/Godot/web_build/index.html`로 고정되어 있다 - **이 폴더가 곧
+  GitHub Pages 저장소**(이 프로젝트 git과는 무관한 별도 저장소)이므로,
+  여기 들어있는 건 항상 배포 빌드뿐이다(개발용은 아래처럼 완전히 다른
+  폴더 `F:/Godot/web_dev`를 쓴다 - 섞일 경로 자체가 없음).
+
+가장 간단한 방법은 `F:\Godot\build_release.bat`을 더블클릭하는 것이다
+(아래 참고). 직접 CLI로 하려면:
 
 ```
-godot --headless --export-release "Web (배포)" "F:/Godot/web_build_release/index.html"
+"F:\Godot\Godot_v4.7.2-stable_win64.exe" --headless --path "F:\Godot\Project\yacht-dice" --export-release "Web (배포)" "F:/Godot/web_build/index.html"
 ```
 
 export가 끝나면 콘솔에 `BuildStamp: 배포용 빌드(yd_release 태그 있음) -
 DEBUG_MODE 꺼짐`이 찍힌다(`addons/build_stamp`가 export 시점에 바로
 알려준다) - **이 줄이 "개발용 빌드"로 찍히면 프리셋을 잘못 골랐다는
-뜻이니 그 자리에서 바로 알 수 있다.** 에디터 GUI로 export할 때도 프리셋
-드롭다운에서 이름이 `Web (배포)`인지 반드시 확인한다.
+뜻이니 그 자리에서 바로 알 수 있다.**
+
+**⚠️ 반드시 CLI로 export한다 - 에디터 GUI의 "내보내기" 버튼은 쓰지
+않는다.** 실제로 겪은 문제: `export_presets.cfg`를 이미 올바르게
+고쳐뒀는데도(디스크 파일 자체는 정상 - `custom_features="yd_release"`가
+그대로 있었음), 에디터를 열어 GUI로 export하니 `yd_release` 태그가 안
+먹힌 빌드가 나온 적이 있다. 에디터가 파일을 열 때 시점에 따라 메모리에
+든 프리셋 상태가 디스크와 어긋날 수 있고(이 세션에서 이미 프리셋
+전체가 통째로 덮어써진 사고를 한 번 겪음 - 그보다 작은 규모로 필드
+하나만 어긋나는 것도 같은 원인 계열이다), GUI로 export하면 그 어긋난
+상태 그대로 빌드가 나온다. CLI(`--headless --export-release`)는 그
+순간 파일을 새로 읽어서 export하므로 이런 어긋남 자체가 생기지 않는다 -
+**베타/정식 배포처럼 정확성이 중요한 export는 항상 CLI만 쓴다.**
+개발 중 화면을 눈으로 보는 `Web (개발)` export는 GUI로 해도 상관없다
+(디버그가 켜진 채로 나오는 게 기본값이라 위험이 없음).
 
 ## 2. 전체 테스트 통과 확인
 
@@ -43,7 +63,7 @@ godot --headless res://scripts/tests/test_runner.tscn
 에디터의 "브라우저에서 실행"은 쓰지 않는다(`docs/web_export.md` 참고 —
 실제 export와 다르게 동작해서 재현 안 되는 버그가 있었다). 상수 값을
 읽는 게 아니라 **실제로 빌드에 구워진 값을 화면에서 직접 본다** -
-1. `F:/Godot/web_build_release`를 정적 서버로 서빙(`python -m http.server`)해서
+1. `F:/Godot/web_build`를 정적 서버로 서빙(`python -m http.server`)해서
    브라우저로 직접 연다.
 2. 화면 좌상단(또는 콘솔)의 빌드 배너에 `디버그 꺼짐`이 찍히는지 확인한다
    (`디버그 켜짐`이면 잘못된 프리셋으로 export된 것 - 1번부터 다시).
@@ -56,7 +76,15 @@ godot --headless res://scripts/tests/test_runner.tscn
 의도치 않게 커밋에 딸려 들어가는 파일이 없는지 마지막으로 확인한다.
 `build_info.gd`의 `BUILD_TIME`은 export할 때마다 자동으로 바뀌는 값이라
 커밋해도 무방하다(`DEBUG_MODE`는 이제 상수가 아니라 계산되는 값이라 이
-파일에 diff가 남지 않는다).
+파일에 diff가 남지 않는다). 이건 이 프로젝트(`F:\Godot\Project\yacht-dice`)의
+git 상태다 - 아래 5번의 `F:/Godot/web_build`는 완전히 별도의 git 저장소다.
+
+## 5. `F:/Godot/web_build`를 GitHub Pages 저장소에 커밋/푸시
+
+`F:/Godot/web_build`는 이 프로젝트 git과 무관한 **별도의 git 저장소**다.
+1~3번으로 만든 배포 빌드가 실제로 GitHub Pages에 올라가려면 그 저장소
+안에서 따로 커밋하고 푸시해야 한다(이 프로젝트의 git 작업과는 다른
+저장소이므로 여기서 자동으로 처리해주지 않는다).
 
 ## 참고 - DEBUG_MODE가 꺼지면(`Web (배포)`로 export하면) 사라지는 것
 

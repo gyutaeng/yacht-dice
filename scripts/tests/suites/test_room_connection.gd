@@ -34,6 +34,7 @@ func run(r) -> void:
 	_test_turn_deadline_timed_out_after_60_seconds(r)
 	_test_turn_deadline_zero_means_no_timer(r)
 	_test_clear_turn_deadline(r)
+	_test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r)
 
 
 func _test_new_slot_starts_connected(r) -> void:
@@ -47,7 +48,7 @@ func _test_mark_slot_disconnected_sets_grace_period(r) -> void:
 	r.expect_eq("연결이 끊기면 GRACE_PERIOD", room.slot_connection_state[0], Room.ConnectionState.GRACE_PERIOD)
 	r.expect_eq("peer_id는 -1로 비워짐", room.slots[0]["peer_id"], -1)
 	r.expect_true("슬롯 자체는 안 비워짐(meta/토큰 유지)", room.slots[0] != null)
-	r.expect_eq("마감 시각은 now + 2분", room.slot_disconnect_deadline_msec[0], 1000 + NetProtocol.RECONNECT_GRACE_MSEC)
+	r.expect_eq("마감 시각은 now + 재접속 유예", room.slot_disconnect_deadline_msec[0], 1000 + NetProtocol.RECONNECT_GRACE_MSEC)
 
 
 func _test_grace_expiry(r) -> void:
@@ -127,3 +128,48 @@ func _test_clear_turn_deadline(r) -> void:
 	room.clear_turn_deadline()
 	r.expect_eq("clear 후엔 0", room.turn_deadline_msec, 0)
 	r.expect_true("0이면 타임아웃 판정 안 함", not room.is_turn_timed_out(999999999))
+
+
+## 재접속 유예를 턴 제한과 같은 60초로 낮추면서(사용자 지적) 생긴 경계
+## 상황 - 자기 턴이 시작된 직후 끊기면 "유예 만료(확정 이탈)"와 "턴 시간
+## 초과"가 정확히 같은 시점에 겹칠 수 있다. server_main.gd의
+## _service_in_game_rooms()가 실제로 하는 순서를 그대로 재현한다:
+## ①모든 슬롯의 그레이스 만료를 먼저 처리(mark_slot_departed) →
+## ②"현재 턴 플레이어가 이탈했거나(current_gone) 또는 턴 시간 초과"를
+## 하나의 if로 묶어 auto_confirm_least_damaging()을 부른다. 이 if가
+## 하나뿐이라(OR 조건 두 개가 각각 따로 부르지 않음) 두 조건이 동시에
+## 참이어도 호출은 항상 한 번뿐이다 - 이 테스트는 그 불변식을 박아둔다.
+## (이 함수가 실제 server_main.gd 코드를 그대로 부르는 게 아니라 같은
+## 순서를 재현한 것이라, 그쪽 로직이 바뀌면 이 테스트도 같이 살펴봐야
+## 한다 - 실제 서버 흐름은 실제 소켓으로도 별도 확인했다.)
+func _test_grace_expiry_and_turn_timeout_coincide_processes_turn_once(r) -> void:
+	r.expect_eq("전제 - 재접속 유예와 턴 제한이 정확히 같은 값(60초)이어야 이 경계가 생김", NetProtocol.RECONNECT_GRACE_MSEC, NetProtocol.TURN_TIMEOUT_MSEC)
+
+	var room := _make_in_game_room()
+	room.game_state.start_turn()
+	var t0 := 1_000_000
+	room.mark_slot_disconnected(0, t0)  # 0번 슬롯(지금 턴 플레이어)이 끊김.
+	room.reset_turn_deadline(t0)  # 같은 순간 턴도 막 시작된 상황을 재현.
+
+	var starting_player: int = room.game_state.current_player
+	r.expect_eq("시작 시점엔 0번 플레이어 턴", starting_player, 0)
+
+	var now2: int = t0 + NetProtocol.RECONNECT_GRACE_MSEC  # == t0 + TURN_TIMEOUT_MSEC(위에서 확인함).
+
+	# --- server_main.gd _service_in_game_rooms()와 같은 순서 ---
+	for i in room.slots.size():
+		if room.slots[i] == null:
+			continue
+		if room.is_grace_expired(i, now2):
+			room.mark_slot_departed(i)
+
+	var current: int = room.game_state.current_player
+	var current_gone: bool = room.slots[current] == null or room.slot_connection_state[current] == Room.ConnectionState.PAST_GRACE
+	var processed_count := 0
+	if current_gone or room.is_turn_timed_out(now2):
+		room.game_state.auto_confirm_least_damaging(current)
+		processed_count += 1
+
+	r.expect_eq("두 조건이 동시에 참이어도 턴 처리는 정확히 한 번", processed_count, 1)
+	r.expect_eq("현재 플레이어가 정확히 한 칸만 넘어감(두 칸 아님)", room.game_state.current_player, (starting_player + 1) % 2)
+	r.expect_true("0번 플레이어의 확정 칸이 정확히 하나만 생김", room.game_state.player_score_confirmed[0].count(true) == 1)

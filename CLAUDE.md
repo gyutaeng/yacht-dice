@@ -114,7 +114,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - **TEMP 진단 로그(`Main.tscn`의 `DebugInitLog` 노드, `Main.gd`의 `_debug_init_log()`)**: 게임 시작 초기화 단계마다 화면 좌상단에 한 줄씩 찍는다. **사용자가 웹에서 최종 확인 끝나면 제거 요청할 것 — 아직 지우지 않았다.**
 
 ### 1-6 이후 버그 수정 2라운드 (res:// 내장 리소스를 AssetLoader로 읽던 문제)
-- **에디터의 "브라우저에서 실행"은 쓰지 않는다.** 임시 폴더에 디버그 빌드를 내보내는 별도 경로라 실제 export 설정과 다르게 동작한다(게임 진행 자체가 막힘 - 정식 export로는 정상). 원인은 안 파고들기로 했다. **웹 테스트는 항상 export → `F:/Godot/web_build` → `python -m http.server` 경로만 쓴다.** `docs/web_export.md`에 굵게 명시함.
+- **에디터의 "브라우저에서 실행"은 쓰지 않는다.** 임시 폴더에 디버그 빌드를 내보내는 별도 경로라 실제 export 설정과 다르게 동작한다(게임 진행 자체가 막힘 - 정식 export로는 정상). 원인은 안 파고들기로 했다. **웹 테스트는 항상 export → `F:/Godot/web_dev` → `python -m http.server` 경로만 쓴다.**(베타 배포 준비 이후 경로 - `F:/Godot/web_build`는 GitHub Pages 배포 전용으로 분리됨, 아래 "베타 배포 준비" 항목 참고) `docs/web_export.md`에 굵게 명시함.
 - **`SfxBank`가 게임 내장 효과음을 못 읽던 버그**: `res://assets/sfx/*.wav`를 `AssetLoader.load_audio_from_path()`(내부적으로 원본 바이트를 `FileAccess`로 읽음)로 불러오고 있었다. res:// 안의 오디오/이미지는 export 시 Godot 임포터가 변환한 리소스로 pck에 들어가고 **원본 바이트는 pck에 안 들어가서**, 에디터 실행(원본이 프로젝트 폴더에 그대로 있음)에서는 되고 export된 빌드에서는 조용히 실패했다(에러도 안 뜨고 그냥 소리가 안 남) — **에디터 실행으로는 재현이 안 되고 실제 export에서만 나타나는 버그**였다. `load()`/`ResourceLoader.exists()`로 교체해서 해결.
 - **같은 함정이 있던 곳 추가로 발견해서 미리 고침**: `CharacterPortrait`/`VoiceBank`가 내장 기본 캐릭터(`res://characters/default`)의 파일을 읽을 때도 `is_builtin`이면 `AssetLoader`를 쓰고 있었다 — 지금은 내장 기본 캐릭터에 이미지/보이스가 아예 없어서 잠재적(latent) 버그였지만, 나중에 실루엣 이미지 등을 res://characters/default/에 넣는 순간 똑같이 터졌을 것. `CharacterLibrary`에 `load_profile_texture()`/`load_profile_audio()`를 새로 만들어 "내장(res://)이면 load(), 사용자(user://)면 AssetLoader"를 한 곳에서 분기하도록 정리하고, 이 두 곳과 `voice_mapping_panel.gd`의 미리듣기까지 전부 이걸 쓰도록 바꿨다.
 - **원칙 3에 한 줄 추가**: PackedByteArray 기반 로딩은 user:// 전용이고, res:// 내장 리소스는 반드시 load()/preload()로 읽는다는 구분을 명시했다.
@@ -957,7 +957,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - 새 테스트 다수 추가, 전체 844개 통과.
 
 ### 현재 전체 테스트 개수
-844개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+849개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 베타 배포 준비 - DEBUG_MODE를 export 프리셋으로 자동 전환
 베타 배포를 앞두고 사용자가 지적: `DEBUG_MODE` 상수를 손으로 껐다 켰다
@@ -986,6 +986,77 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   전환")와 `docs/deployment_checklist.md`(전면 개정)에 정리했다.
 - 전체 844개 테스트 그대로 통과(로직 변경 없음 - 컴파일 타임 상수를
   런타임 계산 값으로 바꾼 것뿐).
+
+### 베타 배포 준비 후속 - 실제 웹 빌드로 재검증 + export 경로 완전 분리
+위 항목 배포 직후 사용자가 실제로 `Web (배포)`를 export했는데 빌드
+배너에 "디버그 켜짐"이 떴다고 보고 - "네이티브(Windows)로만 검증하고
+웹에서만 나는 문제를 놓쳤을 수 있다"는 지적을 받아 다시 조사했다.
+
+- **실제 웹/WASM 런타임으로 재검증**: 처음 시도한
+  `--virtual-time-budget` 방식(헤드리스 브라우저에 가짜 시간을 흘려보내
+  즉시 dump-dom)은 fetch/WASM 컴파일 같은 비동기 작업을 못 기다려서
+  신뢰할 수 없었다 - **CDP(Chrome DevTools Protocol)로 헤드리스
+  Edge를 직접 띄워 진짜 wall-clock 시간을 기다리는 방식**으로 바꿔서
+  `Web (개발)`/`Web (배포)`(release/debug 두 export 템플릿 다) 전부
+  재확인했다. 결과: 메커니즘 자체는 웹에서도 정확히 동작함을 확인
+  (`Web (개발)` → "디버그 켜짐", `Web (배포)` → "디버그 꺼짐").
+- **진짜 원인은 다른 데 있었다 - 에디터 GUI export는 메모리 상태가
+  디스크와 어긋날 수 있다.** `export_presets.cfg` 자체는 (당시에도)
+  정상이었다(`custom_features="yd_release"`가 그대로 있었음). 그런데도
+  GUI로 export한 빌드에서 태그가 안 먹혔다 - 위에서 이미 한 번 겪은
+  "에디터가 파일 전체를 덮어쓰는" 사고와 같은 원인 계열이 더 작은
+  단위(필드 하나)로 재발한 것으로 보인다. **결론: 정확성이 중요한
+  export(특히 배포용)는 항상 CLI(`--headless --export-release`)로 한다
+  - CLI는 실행할 때마다 파일을 새로 읽으므로 에디터 세션 상태와 무관하다.**
+  `docs/deployment_checklist.md`/`docs/web_export.md`에 굵게 경고로 남김.
+- **export 경로를 완전히 분리**(사용자 요청 - GitHub Pages 저장소가
+  `F:/Godot/web_build`인데 개발 중 테스트도 같은 폴더에 export하고 있어서,
+  실수로 개발 빌드를 그 저장소에 커밋해 배포해버릴 경로가 있었다):
+  `Web (개발)` → `F:/Godot/web_dev`(git과 무관, 평소 개발 테스트용),
+  `Web (배포)` → `F:/Godot/web_build`(GitHub Pages 저장소 - **여기 안에는
+  항상 배포 빌드만 있다는 게 폴더가 다르다는 사실만으로 구조적으로
+  보장됨**). `F:/Godot/web_open`(이전에 쓰던 임시 경로)은 이제 안 씀 -
+  정리 대상.
+- **`F:\Godot\build_release.bat` 추가**(`run_server.bat`과 같은 자리,
+  같은 스타일) - Godot exe 전체 경로 + `--path`로 프로젝트 지정 +
+  `--export-release "Web (배포)"` + 끝에 `pause`. 매번 긴 CLI 명령을 손으로
+  치는 대신 더블클릭 한 번으로 배포 빌드를 만든다.
+
+### 2-6 후속 - 재접속 유예를 2분 → 60초로 단축(턴 제한과 같은 값)
+친구와 실제로 플레이해보니 재접속 유예 2분이 너무 길다는 사용자 지적으로
+`NetProtocol.RECONNECT_GRACE_MSEC`를 60초(`TURN_TIMEOUT_MSEC`과 같은 값)로
+낮췄다. 자세한 내용은 `docs/multiplayer.md` §6 "턴 제한 시간" 항목에 정리,
+여기는 요약만.
+
+- **두 값이 같아지면서 생기는 경계(사용자가 먼저 확인 요청)** - 자기
+  턴이 막 시작된 직후 끊기면 "유예 만료(확정 이탈)"와 "턴 시간 초과"가
+  같은 시점에 겹칠 수 있다. 코드를 다시 읽어보니 `server_main.gd`의
+  `_service_in_game_rooms()`가 원래부터 이 둘을 하나의 `if(OR)`로 묶어서
+  `auto_confirm_least_damaging()`을 부르므로(별도의 두 분기가 아님),
+  두 조건이 동시에 참이어도 호출은 항상 정확히 한 번뿐이었다 - **새로
+  생긴 버그가 아니라 기존 설계가 이미 안전했음을 확인**한 것.
+- **경계값 테스트 추가**(`test_room_connection.gd`,
+  `_test_grace_expiry_and_turn_timeout_coincide_processes_turn_once`) -
+  `server_main.gd`가 실제로 하는 순서(그레이스 만료 처리 → 이탈/타임아웃
+  OR 판정 → 자동 확정)를 그대로 재현해서, 두 조건이 겹쳐도 턴 처리가
+  정확히 한 번, current_player가 정확히 한 칸만 넘어가는지 확인한다.
+- **실제 소켓으로도 확인**(임시로 두 값을 3초로 줄여서 검증 후 원복,
+  스크립트는 삭제) - 2인 방에서 0번 플레이어를 턴 시작 직후 응답 없이
+  바로 끊어서 재현: `player_left`가 `reason=timeout`으로 정확히 1번만
+  오고, 최종 스냅샷에서 `current_player`가 정확히 1로(0에서 한 칸만)
+  넘어갔고, 0번 플레이어의 확정 칸도 정확히 1개만 생겼다 - 중복 처리나
+  턴 건너뜀 없음을 실제 코드로 재확인.
+- **값은 상수 하나(`NetProtocol.RECONNECT_GRACE_MSEC`)만 바꾸면 된다** -
+  전체 코드베이스를 훑어 이 값을 리터럴로 하드코딩한 곳이 없음을
+  확인했다(전부 상수를 그대로 참조). 화면 카운트다운도 서버가 매초
+  `player_timer(kind="reconnect")`로 계산해서 보내주는 값을 그대로
+  표시할 뿐이라 클라이언트 쪽 코드 변경도 필요 없었다.
+- **`REMATCH_READY_TIMEOUT_MSEC`(재대전 대기)은 이번 변경 범위 밖 -
+  그대로 2분.** 원래 "재접속 유예와 같은 값"이라고 문서/주석에 적혀
+  있었는데 이제 서로 달라졌으므로, 그 설명을 전부 고쳐서 "재대전 대기는
+  게임이 이미 끝난 뒤라 게임 도중 끊김만큼 급하지 않다"는 별도 근거로
+  바꿨다(`scripts/net/protocol.gd`/`docs/multiplayer.md` 양쪽).
+- 새 테스트 포함 전체 849개 통과.
 
 ### (구) 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 **위 항목으로 대체됨 - 더 이상 이 상수를 손으로 고치지 않는다.** 아래는
