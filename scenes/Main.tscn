@@ -32,7 +32,7 @@ alignment = 1
 [node name="TitleLabel" type="Label" parent="StartScreen/CenterContainer/VBox" unique_id=373646758]
 layout_mode = 2
 theme_override_font_sizes/font_size = 40
-text = "요트다이스"
+text = "Custom 요트다이스"
 horizontal_alignment = 1
 
 [node name="ModeChoiceRow" type="HBoxContainer" parent="StartScreen/CenterContainer/VBox" unique_id=222027532]
@@ -219,14 +219,14 @@ theme_override_font_sizes/font_size = 24
 text = "현재 턴: 플레이어 1"
 horizontal_alignment = 1
 
-[node name="TurnCountdownLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn"]
+[node name="TurnCountdownLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=949784184]
 visible = false
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
 theme_override_colors/font_color = Color(1, 0.8, 0.4, 1)
+theme_override_font_sizes/font_size = 14
 horizontal_alignment = 1
 
-[node name="LeaveToLobbyButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn"]
+[node name="LeaveToLobbyButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=1711356578]
 visible = false
 layout_mode = 2
 text = "로비로 나가기"
@@ -302,7 +302,7 @@ layout_mode = 2
 disabled = true
 text = "점수 확정"
 
-[node name="QuickProgressButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow"]
+[node name="QuickProgressButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow" unique_id=1597296165]
 visible = false
 custom_minimum_size = Vector2(120, 40)
 layout_mode = 2
@@ -369,7 +369,7 @@ text = "게임 종료!"
 horizontal_alignment = 1
 autowrap_mode = 2
 
-[node name="GameOverResultsList" type="VBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox"]
+[node name="GameOverResultsList" type="VBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox" unique_id=1766389033]
 layout_mode = 2
 theme_override_constants/separation = 8
 
@@ -396,35 +396,36 @@ ok_button_text = "그만두기"
 dialog_text = "정말 그만두시겠습니까? 지금까지의 진행 상황은 사라집니다."
 cancel_button_text = "취소"
 
-[node name="ReconnectOverlay" type="Control" parent="."]
+[node name="ReconnectOverlay" type="Control" parent="." unique_id=1936679384]
 visible = false
 anchors_preset = 0
 anchor_right = 1.0
 mouse_filter = 2
 
-[node name="Banner" type="PanelContainer" parent="ReconnectOverlay"]
+[node name="Banner" type="PanelContainer" parent="ReconnectOverlay" unique_id=1358138999]
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
 offset_bottom = 44.0
+grow_horizontal = 2
 mouse_filter = 1
 
-[node name="HBox" type="HBoxContainer" parent="ReconnectOverlay/Banner"]
+[node name="HBox" type="HBoxContainer" parent="ReconnectOverlay/Banner" unique_id=438513831]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="StatusLabel" type="Label" parent="ReconnectOverlay/Banner/HBox"]
+[node name="StatusLabel" type="Label" parent="ReconnectOverlay/Banner/HBox" unique_id=1098779102]
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "연결이 끊어졌습니다. 재접속 시도 중..."
 
-[node name="OverlayLeaveButton" type="Button" parent="ReconnectOverlay/Banner/HBox"]
+[node name="OverlayLeaveButton" type="Button" parent="ReconnectOverlay/Banner/HBox" unique_id=1370515780]
 visible = false
 layout_mode = 2
 text = "로비로 나가기"
 
-[node name="SessionResumeDialog" type="ConfirmationDialog" parent="."]
+[node name="SessionResumeDialog" type="ConfirmationDialog" parent="." unique_id=1161480983]
 title = "이전 게임"
 initial_position = 1
 ok_button_text = "돌아가기"

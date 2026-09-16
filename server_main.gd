@@ -398,6 +398,11 @@ func _handle_select_character(sender_id: int, payload: Dictionary) -> void:
 	room.slots[slot_index]["meta"] = safe_meta
 	_broadcast_room(room, NetProtocol.MSG_PLAYER_CHARACTER, {"player_index": slot_index, "meta": safe_meta})
 
+	# 3번째 재대전 버그 조사(사용자 요청) - [한 판 더] 확정이 실제로 서버에
+	# 도착하는지 눈으로 확인하기 위한 진단. DEBUG_MODE에 묶어서 배포에는 안 남는다.
+	if BuildInfo.DEBUG_MODE and room.state == Room.State.REMATCHING:
+		print("[서버] 방 %s: 재대전 대기 중 슬롯 %d 캐릭터 갱신 수신(pack_hash=%s)" % [room.code, slot_index, ("있음" if pack_hash != "" else "없음")])
+
 
 func _is_valid_pack_hash(value: String) -> bool:
 	if value.is_empty():
@@ -429,6 +434,19 @@ func _handle_ready(sender_id: int, payload: Dictionary) -> void:
 
 	var slot_index := room.find_slot_by_peer(sender_id)
 	room.slots[slot_index]["ready"] = ready_value
+
+	# 3번째 재대전 버그 조사(사용자 요청) - [한 판 더]를 눌렀을 때 실제로
+	# 서버까지 ready 메시지가 오는지 확인용. DEBUG_MODE에 묶어서 배포에는 안 남는다.
+	if BuildInfo.DEBUG_MODE and room.state == Room.State.REMATCHING:
+		var ready_count := 0
+		var occupied_count := 0
+		for slot in room.slots:
+			if slot != null:
+				occupied_count += 1
+				if slot["ready"]:
+					ready_count += 1
+		print("[서버] 방 %s: 재대전 준비 수신 - 슬롯 %d ready=%s (준비 %d/%d)" % [room.code, slot_index, ready_value, ready_count, occupied_count])
+
 	_broadcast_room(room, NetProtocol.MSG_PLAYER_READY_CHANGED, {"player_index": slot_index, "ready": ready_value})
 
 	_maybe_start_game(room)
@@ -486,6 +504,8 @@ func _maybe_start_game(room: Room) -> void:
 	if not room.accepts_lobby_actions() or not room.all_ready():
 		return
 	if room.state == Room.State.REMATCHING:
+		if BuildInfo.DEBUG_MODE:
+			print("[서버] 방 %s: 재대전 전원 준비 완료 - 전송 단계로 진입" % room.code)
 		room.clear_rematch_deadline()
 	_begin_transferring(room)
 

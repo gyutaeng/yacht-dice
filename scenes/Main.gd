@@ -388,6 +388,17 @@ func _show_screen(screen: Screen) -> void:
 	game_screen.visible = (screen == Screen.GAME)
 	online_screen.visible = (screen == Screen.ONLINE)
 
+	# 3번째 재대전 버그의 진짜 원인 - GameOverOverlay/ReconnectOverlay는
+	# 위 4개 화면과 달리 Screen enum 밖의 "루트에 뜨는 오버레이"라 여기서
+	# 안 건드리면 화면이 바뀌어도 계속 떠서 새 화면을 가린다([한 판 더]를
+	# 눌러도 CHARACTER_SELECT로 넘어가긴 했는데 GameOverOverlay가 그 위에
+	# 계속 떠 있어서 아무 반응이 없는 것처럼 보였다). 예전엔
+	# _return_to_title()이 이 둘을 개별적으로만 닫아서 [나가기]는 되고
+	# [한 판 더]는 안 됐다 - 화면이 바뀌는 모든 경로가 거치는 이 함수
+	# 하나로 통합해서 같은 종류의 구멍이 새 오버레이에서 또 생기지 않게 한다.
+	game_over_overlay.visible = false
+	reconnect_overlay.visible = false
+
 	# 온라인 로비(ONLINE)와 온라인 게임(GAME + my_player_index != -1) 양쪽
 	# 다 디버그 단축키 버튼을 숨긴다 - 온라인 화면에 "야추 강제" 버튼이
 	# 떠 있으면 안 된다(2-4에서 사용자가 지적). 분기는 이 한 곳뿐이다.
@@ -524,7 +535,6 @@ func _return_to_title() -> void:
 	# 쓰이므로 깨끗한(비어있는) SessionStore.clear() 자체는 항상 안전하다.
 	SessionStore.clear()
 	_disconnect_online_client_signals()
-	reconnect_overlay.visible = false
 	leave_to_lobby_button.visible = false
 	_departed_player_indices.clear()
 
@@ -534,7 +544,8 @@ func _return_to_title() -> void:
 	debug_hotkeys.game_state = null
 	VoiceBank.configure([])
 
-	game_over_overlay.visible = false
+	# game_over_overlay/reconnect_overlay는 _show_screen()이 화면 전환마다
+	# 항상 닫아준다(위 주석 참고) - 여기서 또 개별적으로 안 닫아도 된다.
 	_show_screen(Screen.START)
 
 
@@ -626,6 +637,22 @@ func _on_online_player_left(player_index: int, reason: String) -> void:
 		label.text = "연결 끊김 - 재접속 대기 중"
 		label.visible = true
 
+	# 2-6B 후속(3번째 재대전 버그, 사용자 지적) - 재대전 대기 중(게임은
+	# 이미 끝났고 아직 새 판이 시작되지 않은 상태)에 누가 나가면, 나는
+	# 아직 로비 화면으로 안 돌아갔으니 직접 돌려보내야 한다. "게임 종료
+	# 화면이 떠 있는지"(game_over_overlay.visible) 같은 화면 상태로
+	# 판단하면 나중에 화면 구성이 바뀔 때 조용히 틀린다 - 방금 그
+	# 오버레이가 정확히 그 문제였다. 대신 game_state.game_over(서버
+	# 스냅샷을 그대로 미러링한 실제 게임 데이터, UI 구성과 무관)로
+	# 판단한다: 게임이 끝난 뒤 아직 새 game_state로 안 바뀌었으면(즉
+	# _enter_game()이 새로 안 불렸으면) 나는 여전히 재대전 대기 중이라는
+	# 뜻이다. online_screen은 화면이 안 보이는 동안에도 같은 GameClient로
+	# player_joined/player_character 등을 계속 받고 있어서 참가자 목록이
+	# 항상 최신이므로, 화면만 보여주면 된다.
+	if reason == "timeout" or reason == "left":
+		if game_state != null and game_state.game_over:
+			_show_screen(Screen.ONLINE)
+
 
 func _on_online_player_reconnected(player_index: int) -> void:
 	if player_index < 0 or player_index >= connection_status_labels.size():
@@ -679,7 +706,6 @@ func _enter_game(controller, profiles: Array[CharacterProfile], my_index: int = 
 	_debug_log_special_hand_subscribers()
 	_clear_dynamic_nodes()
 
-	game_over_overlay.visible = false
 	active_controller = controller
 	my_player_index = my_index
 	_show_screen(Screen.GAME)

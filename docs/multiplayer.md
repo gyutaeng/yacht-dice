@@ -490,6 +490,77 @@ ping/pong(RFC 6455 컨트롤 프레임)을 가리켰지만, 실제 구현 시점
   받는다.** `_service_rematch_rooms()`를 방송을 전부 먼저 끝내고 나서
   비우는 순서로 고쳐서 해결했다(두 방 있는 반복 while 루프).
 
+### 재대전 UI가 안 뜨던 버그 - 서버 크래시를 고친 뒤 증상이 바뀜(2-6B 후속, 3번째 라운드)
+
+2-6B를 배포한 뒤 실제 사용자가 두 라운드에 걸쳐 겪은 버그. 1라운드는
+서버가 아예 크래시하는 문제였고(§ 위 "실제 소켓 검증 중 발견하고 고친
+버그"와는 다른, `_service_rematch_rooms()`/`_warn_if_transfer_stalled()`
+등에서 배열 원소가 `null`인데 타입 있는 `Dictionary` 변수에 대입하려다
+난 것 - `Room.not_ready_occupied_slots()`로 뽑아서 null 검사를 먼저
+하도록 고침), 그걸 고치자 **증상이 바뀌어서** 서버는 안 죽는데 양쪽
+클라이언트 다 `[한 판 더]`를 눌러도 아무 반응이 없고, 한 명이
+`[나가기]`를 눌러야만 그 사람만 로비로 갔다.
+
+**원인 1 - `GameOverOverlay`가 `_show_screen()`의 관리 밖에 있었다.**
+`_show_screen(Screen)`(§3의 로비 상태 기계와는 다른, `scenes/Main.gd`의
+화면 전환 함수 - START/CHARACTER_SELECT/GAME/ONLINE 4개만 관리)은 이
+4개 화면만 켜고 끄고, `GameOverOverlay`는 "GAME 위에 뜨는 모달"이라는
+이유로 이 enum 밖에서 개별적으로만 관리되고 있었다. `[한 판 더]`를
+누르면 실제로는 `_show_screen(Screen.CHARACTER_SELECT)`까지 정확히
+불렸지만(리모컨 구조 자체는 정상 - id 매칭 오류라는 사용자의 원래
+의심은 코드를 직접 대조해서 기각함), `GameOverOverlay`가 안 닫힌 채
+그 위에 계속 떠 있어서 캐릭터 선택 화면이 가려져 "아무 반응 없음"으로
+보였다. 예전엔 `_return_to_title()`(`[나가기]`가 부름)만 이 오버레이를
+명시적으로 닫아서, `[나가기]`는 되고 `[한 판 더]`는 안 되는 비대칭이
+생겼다.
+
+**교훈이자 재발 방지책 - "화면이 바뀌는 통로 하나(`_show_screen()`)에서
+루트 레벨 오버레이를 전부 정리한다."** 같은 구멍이 있는지 훑어본 결과
+`ReconnectOverlay`(연결 끊김 배너)도 정확히 같은 문제(오직
+`_return_to_title()`만 개별적으로 닫음)였다. 나머지 루트 레벨
+오버레이/다이얼로그(`QuitConfirmDialog`, `SessionResumeDialog`,
+`DebugInitLog`, `DebugHotkeys` 패널)는 각자 자기가 뜬 맥락 안에서만
+스스로 닫혀서 안전했고, `InputBlocker`/`GreetingSkipButton`/
+`SpecialHandLabel`처럼 `GameScreen` 아래 **중첩**된 것들은 부모
+(`GameScreen`)가 안 보이면 자식도 자동으로 렌더링/클릭이 막히는 Godot
+Control 트리 규칙 덕에 별도 처리가 필요 없었다(캐릭터 편집 화면의
+다이얼로그들도 같은 이유로 안전 - 편집 화면 자체가 `_show_screen()`과
+완전히 무관한 별도 씬으로 열리고 닫힌다). 이제 `_show_screen()`이
+호출될 때마다 `GameOverOverlay`/`ReconnectOverlay`를 무조건 닫으므로,
+`_return_to_title()`/`_enter_game()`에 있던 개별 `.visible = false` 줄은
+전부 제거했다(단일 통로로 통일). `test_game_over_ui.gd`에 이 불변식
+자체를 테스트로 박아뒀다 - "`_show_screen()`을 START/CHARACTER_SELECT/
+GAME/ONLINE 중 어느 것으로 부르든, 호출 후엔 두 오버레이가 항상 닫혀
+있다"를 4가지 화면 전부에 대해 확인하므로, 나중에 새 루트 레벨
+오버레이가 생겨도 같은 종류의 구멍이 조용히 재발하면 이 테스트가
+잡아준다.
+
+**원인 2 - 남은 사람이 로비로 안 돌아가는 문제.** 재대전 대기 중에
+한 명이 `[나가기]`를 누르면 그 사람은 `_return_to_title()`을 타서
+로비로 가지만, 남은 사람의 `_on_online_player_left()`는 원래 2-6이
+정한 대로 "게임 진행 중 이탈"(상태 라벨만 갱신 + 서버가 대신 자동
+진행)만 처리하고 있었다 - 재대전 대기 중 이탈이라는 새 시나리오를
+전혀 몰랐다.
+
+**판단 근거 - "화면이 떠 있는지"가 아니라 "방 상태"로 판단한다.**
+처음엔 "`GameOverOverlay`가 지금 보이는지"로 재대전 대기 중인지
+판단하려 했으나, 이건 바로 위 원인 1과 똑같은 함정이다 - 화면 구성이
+바뀌면 조용히 틀린다. 대신 **클라이언트가 이미 갖고 있는 실제 게임
+데이터** `game_state.game_over`(서버 스냅샷을 그대로 미러링한 값,
+UI 구성과 무관)로 판단한다: 게임이 끝난 뒤 아직 `_enter_game()`이
+새로 안 불렸으면(즉 새 판 `game_state`로 안 바뀌었으면) 나는 여전히
+재대전 대기 중이라는 뜻이다. 서버에 별도의 "지금 방 상태가 뭔지
+알려주는" 메시지/필드를 새로 추가하지 않은 이유: `game_state.game_over`
+가 이미 서버 권위 데이터를 그대로 반영하는 필드라, 새 프로토콜 필드를
+추가해 왕복 지연이나 버전 관리 부담을 지는 것보다 지금 가진 데이터를
+쓰는 게 더 단순하고 지연도 없다. `_on_online_player_left(reason
+in {"timeout", "left"})`에서 `game_state != null and
+game_state.game_over`면 `_show_screen(Screen.ONLINE)`을 부른다 -
+`online_screen`은 화면이 안 보이는 동안에도 같은 `GameClient`로
+`player_left`/`player_joined` 등을 계속 받아 참가자 목록을 항상
+최신으로 유지하고 있어서(2-6부터 이미 그런 구조), 화면만 다시 보여주면
+된다.
+
 ### 클라이언트 쪽 재접속 정보 저장 (새로고침 대응)
 
 토큰이 클라이언트 메모리에만 있으면 웹에서 가장 흔한 복구 동작인

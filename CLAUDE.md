@@ -907,8 +907,57 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   보이스 재생을 기다리는 코드를 추가하지 않았다.
 - 전체 826개 통과.
 
+### 2-6B 후속 - 재대전 버튼이 안 먹던 버그 수정 (서버 크래시를 고친 뒤 증상이 바뀐 3번째 라운드)
+2-6B 배포 후 실제로 두 라운드에 걸쳐 겪은 버그. 1라운드(서버 크래시 -
+`_service_rematch_rooms()` 등에서 배열 원소가 `null`인데 타입 있는
+`Dictionary` 변수에 대입해서 남 - `Room.not_ready_occupied_slots()`로
+뽑아 null 검사를 먼저 하도록 고침)를 고치자 서버는 안 죽는데 양쪽 다
+`[한 판 더]`를 눌러도 반응이 없고 `[나가기]`를 누른 사람만 로비로
+가는 증상으로 바뀌었다. 자세한 조사 과정/코드 위치는
+`docs/multiplayer.md` §6 "재대전 UI가 안 뜨던 버그" 참고, 여기는 요약만.
+
+- **원인 1**: `GameOverOverlay`가 4개 화면(START/CHARACTER_SELECT/GAME/
+  ONLINE)을 관리하는 `_show_screen()`의 관리 밖에서 개별적으로만
+  닫히고 있었다 - `[한 판 더]`가 실제로 `_show_screen(CHARACTER_SELECT)`
+  까지는 정확히 불렀지만(리모컨 구조 자체는 정상 - 사용자의 "액션 id
+  불일치" 의심은 코드 대조로 기각), 오버레이가 그 위에 계속 떠서
+  "아무 반응 없음"으로 보였다. `_show_screen()`이 호출될 때마다
+  `GameOverOverlay`/`ReconnectOverlay`(같은 구멍이 있어서 같이 발견)를
+  무조건 닫도록 통합해서 해결 - `_return_to_title()`/`_enter_game()`에
+  있던 개별 `.visible = false` 줄은 제거(단일 통로로 통일).
+- **사용자 요청으로 같은 종류의 구멍이 더 있는지 루트 레벨 오버레이를
+  전부 훑음**: `QuitConfirmDialog`/`SessionResumeDialog`/`DebugInitLog`/
+  `DebugHotkeys`는 각자 맥락 안에서 스스로 닫혀서 안전, `InputBlocker`/
+  `GreetingSkipButton`/`SpecialHandLabel`(1-3C/1-4C)은 `GameScreen`
+  아래 중첩되어 있어 부모가 안 보이면 자동으로 같이 가려짐(Godot
+  Control 트리 규칙), 캐릭터 편집 화면 다이얼로그들은 편집 화면 자체가
+  `_show_screen()`과 무관한 별도 씬이라 안전 - 실제로 고칠 게 있던 건
+  `GameOverOverlay`/`ReconnectOverlay` 둘뿐이었다.
+- **원인 2**: 재대전 대기 중 한 명이 나가면 남은 사람의
+  `_on_online_player_left()`가 "게임 진행 중 이탈"(2-6, 상태 라벨만
+  갱신) 분기만 알고 있어서 로비로 안 돌아갔다. **사용자 지적 - "화면이
+  떠 있는지"가 아니라 "방 상태"로 판단하라**: `GameOverOverlay.visible`
+  로 재대전 대기 여부를 판단하면 원인 1과 똑같은 함정(화면 구성이
+  바뀌면 조용히 틀림)이라, 대신 서버 스냅샷을 그대로 미러링한 실제
+  게임 데이터 `game_state.game_over`로 판단하도록 고쳤다(재대전 대기
+  중이면 아직 새 `game_state`로 안 바뀐 상태) - 서버에 새 필드/메시지를
+  추가하지 않고 클라이언트가 이미 가진 데이터를 재사용했다.
+- **테스트에 불변식을 박음**(사용자 요청) - `test_game_over_ui.gd`에
+  "`_show_screen()`을 4가지 화면 중 어느 것으로 부르든, 호출 후엔
+  `GameOverOverlay`/`ReconnectOverlay`가 항상 닫혀 있다"를 추가해서,
+  나중에 새 루트 레벨 오버레이가 생겨도 같은 구멍이 조용히 재발하면
+  자동으로 잡히게 했다. `_on_game_over_action_pressed()`를 실제
+  `Main.tscn` 인스턴스에 직접 먹여 화면 전환/오버레이 정리를 확인하는
+  테스트, `_on_online_player_left()`의 방 상태 판단(재대전 대기 중
+  이탈 vs 게임 진행 중 이탈)을 확인하는 테스트도 추가했다.
+- **서버 로그 보강**(사용자 요청, `BuildInfo.DEBUG_MODE`에 묶음) -
+  `[한 판 더]` 확정 시 클라이언트(`select_character`+`ready` 전송)와
+  서버(재대전 준비 수신/전원 준비 완료) 양쪽에 진단 로그를 추가해서,
+  다음에 비슷한 증상이 나면 어디서 끊기는지 바로 보이게 했다.
+- 새 테스트 다수 추가, 전체 844개 통과.
+
 ### 현재 전체 테스트 개수
-826개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+844개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 `DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은

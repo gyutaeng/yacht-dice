@@ -201,6 +201,10 @@ func confirm_rematch_character(profile: CharacterProfile) -> void:
 	set_my_profile(profile)
 	_client.select_character(_my_character_meta())
 	_client.set_ready(true)
+	# 3번째 재대전 버그 조사(사용자 요청) - [한 판 더] 확정이 실제로
+	# select_character/ready를 서버로 보내는지 확인용 진단.
+	if BuildInfo.DEBUG_MODE:
+		print("[클라] 한 판 더 확정 - select_character + ready(true) 전송함")
 
 
 ## 2-6B - 재대전 대기 카운트다운(kind="rematch")만 로비 상태 문구에

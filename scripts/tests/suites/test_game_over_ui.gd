@@ -86,6 +86,59 @@ func run(r) -> void:
 	r.expect_eq("온라인 첫 버튼은 한 판 더", online_buttons[0].text, "한 판 더")
 	r.expect_eq("온라인 둘째 버튼은 나가기", online_buttons[1].text, "나가기")
 
+	# --- 3번째 재대전 버그 회귀(사용자 요청 - "테스트가 UI를 지나가게") ---
+	# get_game_over_actions()의 액션 id를 _on_game_over_action_pressed()에
+	# 직접 먹여서, 실제로 화면이 바뀌고 game_over_overlay가 닫히는지까지
+	# 확인한다. "leave"는 게임 상태를 완전히 정리하므로 항상 마지막에 돌린다.
+	main.active_controller = online_controller
+	main.game_over_overlay.visible = true
+	main._on_game_over_action_pressed("rematch")
+	r.expect_true("rematch 액션 - GameOverOverlay가 닫힘", not main.game_over_overlay.visible)
+	r.expect_true("rematch 액션 - 캐릭터 선택 화면으로 전환됨", main.character_select_screen.visible)
+	r.expect_true("rematch 액션 - 게임 화면은 가려짐", not main.game_screen.visible)
+
+	# --- "화면 상태 대신 방 상태로 판단"(사용자 요청) ---
+	# _on_online_player_left()가 game_over_overlay.visible 같은 화면
+	# 상태가 아니라 game_state.game_over(서버 스냅샷을 미러링한 실제 게임
+	# 데이터)로 판단하는지 확인한다. 재대전 대기 중(game_over=true)에
+	# 누가 나가면 온라인 로비로 돌려보내고, 게임이 아직 진행 중이면
+	# (game_over=false, 기존 2-6 시나리오) 화면을 안 바꾼다.
+	# game_state는 아직 살아있다(restart/leave 전이라 안 지워짐).
+	main.game_state.game_over = true
+	main._show_screen(2)  # GAME - 재대전 대기 화면(게임 화면 위 오버레이) 상태를 재현.
+	main._on_online_player_left(1, "left")
+	r.expect_true("재대전 대기 중 이탈 - 온라인 로비 화면으로 전환됨", main.online_screen.visible)
+
+	main.game_state.game_over = false
+	main._show_screen(2)  # GAME
+	main._on_online_player_left(2, "left")
+	r.expect_true("게임 진행 중 이탈(기존 2-6) - 화면은 그대로 GAME", main.game_screen.visible)
+	r.expect_true("게임 진행 중 이탈 - 로비로 튕기지 않음", not main.online_screen.visible)
+
+	main.game_over_overlay.visible = true
+	main._on_game_over_action_pressed("restart")
+	r.expect_true("restart 액션 - GameOverOverlay가 닫힘", not main.game_over_overlay.visible)
+	r.expect_true("restart 액션 - 게임 화면으로 전환됨", main.game_screen.visible)
+
+	main.game_over_overlay.visible = true
+	main._on_game_over_action_pressed("leave")
+	r.expect_true("leave 액션 - GameOverOverlay가 닫힘", not main.game_over_overlay.visible)
+	r.expect_true("leave 액션 - 시작 화면으로 전환됨", main.start_screen.visible)
+
+	# --- 불변식(사용자 요청) ---
+	# "_show_screen()을 어떤 화면으로 부르든, 호출 후에는 game_over_overlay가
+	# 닫혀 있다"를 네 화면 전부에 대해 확인한다. reconnect_overlay도 같은
+	# 종류의 구멍이라 같이 검사한다(3번째 재대전 버그 조사에서 함께 발견).
+	# 나중에 화면 구성이 하나 늘어도 이 테스트가 자동으로 잡아준다.
+	# Screen enum 순서(Main.gd - class_name이 없어 정수로 씀):
+	# START=0, CHARACTER_SELECT=1, GAME=2, ONLINE=3.
+	for screen_id in [0, 1, 2, 3]:
+		main.game_over_overlay.visible = true
+		main.reconnect_overlay.visible = true
+		main._show_screen(screen_id)
+		r.expect_true("_show_screen(%d) 후 game_over_overlay 닫힘" % screen_id, not main.game_over_overlay.visible)
+		r.expect_true("_show_screen(%d) 후 reconnect_overlay 닫힘" % screen_id, not main.reconnect_overlay.visible)
+
 	_cleanup(main, [thumb_profile, plain_profile])
 
 
