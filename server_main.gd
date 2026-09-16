@@ -28,12 +28,31 @@ const PORT_ENV_VAR := "YACHT_DICE_PORT"
 # 같은 값을 써야 해서 NetProtocol(공유 파일)에 정의돼 있다.
 const TRANSFER_COLLECT_MSEC := 1000
 
+# 2-6(연결 끊김 감지, docs/multiplayer.md §6) - "WebSocket 레벨 ping/pong"
+# 대신 애플리케이션 레벨 메시지로 직접 구현한다(2-5 후속 §8.5-6에서 얻은
+# 교훈 - 엔진의 WebSocket 관련 동작을 검증 없이 믿지 않는다). 5초마다
+# 확인된 접속 전원에게 ping을 보내고, 15초간 아무 메시지도(디코드 성공
+# 여부와 무관) 안 온 접속은 끊는다.
+const PING_INTERVAL_MSEC := 5000
+const PING_TIMEOUT_MSEC := 15000
+
 var peer := WebSocketMultiplayerPeer.new()
 var room_manager := RoomManager.new()
 
 # hello 확인 전인 접속을 추적한다 - 5초 안에 hello가 안 오면 끊는다(§2.0).
 var _pending_since: Dictionary = {}  # peer_id -> Time.get_ticks_msec()
 var _hello_confirmed: Dictionary = {}  # peer_id -> true
+
+# 2-6 - 각 접속에서 마지막으로 뭐든 메시지가 온 시각. ping/pong 전용이
+# 아니라 모든 메시지가 이걸 갱신한다(조용히 정상 진행 중인 접속을 pong
+# 하나로만 판단하지 않기 위함).
+var _last_seen_msec: Dictionary = {}  # peer_id(int) -> msec
+var _next_ping_broadcast_msec: int = 0
+
+# 2-6(턴 타임아웃/재접속 유예 카운트다운) - 방 코드별로 1초에 한 번만
+# player_timer를 방송하기 위한 스로틀. Room 자신은 이 방송 주기를 몰라도
+# 되므로(네트워크 개념) 서버 쪽에 둔다.
+var _next_timer_broadcast_msec: Dictionary = {}  # room_code(String) -> msec
 
 # 2-5 전송 버그 수정 - game_client.gd의 같은 필드와 같은 이유(outbound_buffer_size
 # 기본값 65535바이트를 큰 청크 몇 개가 같은 프레임에 바로 넘긴다). 서버는
@@ -115,7 +134,10 @@ func _process(_delta: float) -> void:
 			_pending_since.erase(id)
 			peer.disconnect_peer(id)
 
+	_service_ping_timeouts(now)
 	_service_transferring_rooms(now)
+	_service_in_game_rooms(now)
+	_service_rematch_rooms(now)
 
 	while peer.get_available_packet_count() > 0:
 		var sender_id := peer.get_packet_peer()
@@ -138,6 +160,7 @@ func _resolve_port() -> int:
 func _on_peer_connected(id: int) -> void:
 	print("[서버] 접속: peer %d" % id)
 	_pending_since[id] = Time.get_ticks_msec()
+	_last_seen_msec[id] = Time.get_ticks_msec()
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -145,7 +168,24 @@ func _on_peer_disconnected(id: int) -> void:
 	_pending_since.erase(id)
 	_hello_confirmed.erase(id)
 	_outgoing_queues.erase(id)
-	_remove_peer_and_notify(id, "disconnected")
+	_last_seen_msec.erase(id)
+	_remove_peer_and_notify(id, "disconnected", false)
+
+
+## 2-6(§6) - 5초마다 확인된 접속 전원에게 ping을 보내고, 15초간 아무
+## 메시지도 안 온 접속은 직접 끊는다. 끊긴 뒤 정리는 기존
+## _on_peer_disconnected 경로가 그대로 한다(여기서는 disconnect_peer()만
+## 부른다).
+func _service_ping_timeouts(now: int) -> void:
+	if now >= _next_ping_broadcast_msec:
+		_next_ping_broadcast_msec = now + PING_INTERVAL_MSEC
+		for id in _hello_confirmed.keys():
+			_send(id, NetProtocol.MSG_PING, {})
+
+	for id in _last_seen_msec.keys().duplicate():
+		if now - _last_seen_msec[id] > PING_TIMEOUT_MSEC:
+			print("[서버] peer %d: %.0f초간 무응답 - 연결 종료" % [id, PING_TIMEOUT_MSEC / 1000.0])
+			peer.disconnect_peer(id)
 
 
 ## 메시지 크기 상한(§2.0)을 넘으면 내용을 해석하지 않고 끊는다 - 다만 저수준
@@ -153,6 +193,10 @@ func _on_peer_disconnected(id: int) -> void:
 ## 작은 크기를 미리 알아낼 방법이 없다). "해석하지 않는다"는 JSON으로
 ## 파싱해 필드를 들여다보지 않는다는 뜻이다.
 func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
+	# 2-6(§6) - 어떤 메시지든 왔다는 것 자체가 "이 접속은 아직 살아있다"는
+	# 증거다(디코드 성공 여부와 무관 - 깨진 메시지라도 살아있다는 뜻은 됨).
+	_last_seen_msec[sender_id] = Time.get_ticks_msec()
+
 	if bytes.size() > NetProtocol.MAX_MESSAGE_BYTES:
 		print("[서버] peer %d: 메시지 크기 초과(%d바이트) - 연결 종료" % [sender_id, bytes.size()])
 		peer.disconnect_peer(sender_id)
@@ -202,6 +246,8 @@ func _handle_packet(sender_id: int, bytes: PackedByteArray) -> void:
 			_handle_pack_ready(sender_id, payload)
 		NetProtocol.MSG_REQUEST_PACK_CHUNKS:
 			_handle_request_pack_chunks(sender_id, payload)
+		NetProtocol.MSG_PONG:
+			pass  # 위에서 이미 _last_seen_msec를 갱신했으므로 할 일이 없다.
 		NetProtocol.MSG_HELLO:
 			pass  # 이미 확인된 접속이 다시 보내면 그냥 무시한다.
 		_:
@@ -247,9 +293,11 @@ func _handle_create_room(sender_id: int, payload: Dictionary) -> void:
 	})
 
 
-## reconnect_token이 페이로드에 와도(§2.1 join_room 선택 필드) 2-3 범위에서는
-## 아직 검증하지 않는다 - 실제 재접속 매칭은 2-6에서 구현한다. 지금은 토큰
-## 유무와 무관하게 항상 새 참가자로 처리한다.
+## 2-6(§6) - reconnect_token이 있고 방이 이미 LOBBY를 벗어났으면(TRANSFERRING/
+## IN_GAME) 새 참가자가 아니라 재접속으로 처리된다(room_manager.join_room()이
+## 판단). 재접속 성공 시 방 전원에게 player_reconnected를 알리고, 게임이
+## 이미 진행 중이면(IN_GAME) 그 자리에서 바로 최신 state_snapshot도 하나
+## 더 보내준다 - §5 "매번 전체 스냅샷" 원칙을 재접속에도 그대로 적용한 것.
 func _handle_join_room(sender_id: int, payload: Dictionary) -> void:
 	if room_manager.get_room_for_peer(sender_id) != null:
 		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "이미 방에 들어가 있습니다.")
@@ -260,7 +308,18 @@ func _handle_join_room(sender_id: int, payload: Dictionary) -> void:
 		_send_error(sender_id, NetProtocol.ERROR_INVALID_ARGUMENT, "방 코드가 필요합니다.")
 		return
 
-	var result = room_manager.join_room(code, sender_id)
+	var reconnect_token := str(payload.get("reconnect_token", ""))
+
+	# 2-6B(재대전) - REMATCHING에서는 신규 참가(빈 슬롯을 채우는 새 사람)도
+	# 가능해져서, "room.state != LOBBY면 재접속"이라는 예전 가정이 더 이상
+	# 안 맞는다(REMATCHING인데 실제로는 신규 참가일 수 있음). 그래서
+	# join_room()을 부르기 전에 토큰이 실제로 어느 슬롯과 일치하는지
+	# 직접 확인해서 재접속 여부를 판단한다 - join_room() 안에서도 같은
+	# 조회를 다시 하지만 순수 조회라 부작용이 없어 문제없다.
+	var room_before_join := room_manager.get_room(code)
+	var is_reconnect := room_before_join != null and not reconnect_token.is_empty() and room_before_join.find_slot_by_reconnect_token(reconnect_token) != -1
+
+	var result = room_manager.join_room(code, sender_id, reconnect_token)
 	if result is String:
 		_send_error(sender_id, result, _join_error_message(result))
 		return
@@ -268,7 +327,7 @@ func _handle_join_room(sender_id: int, payload: Dictionary) -> void:
 	var room: Room = result
 	var my_index := room.find_slot_by_peer(sender_id)
 	var my_slot: Dictionary = room.slots[my_index]
-	print("[서버] 방 %s 참가: peer %d (슬롯 %d)" % [room.code, sender_id, my_index])
+	print("[서버] 방 %s %s: peer %d (슬롯 %d)" % [room.code, "재접속" if is_reconnect else "참가", sender_id, my_index])
 
 	_send(sender_id, NetProtocol.MSG_ROOM_JOINED, {
 		"players": room.players_summary(),
@@ -280,7 +339,13 @@ func _handle_join_room(sender_id: int, payload: Dictionary) -> void:
 		# 있는 선택적 필드 추가라 §2.0 규칙상 버전을 안 올려도 된다.
 		"player_count": room.capacity,
 	})
-	_broadcast_room(room, NetProtocol.MSG_PLAYER_JOINED, {"player_index": my_index, "meta": {}}, sender_id)
+
+	if is_reconnect:
+		_broadcast_room(room, NetProtocol.MSG_PLAYER_RECONNECTED, {"player_index": my_index})
+		if room.state == Room.State.IN_GAME:
+			_send(sender_id, NetProtocol.MSG_STATE_SNAPSHOT, room.game_state.get_state_snapshot())
+	else:
+		_broadcast_room(room, NetProtocol.MSG_PLAYER_JOINED, {"player_index": my_index, "meta": {}}, sender_id)
 
 
 func _join_error_message(code: String) -> String:
@@ -300,7 +365,7 @@ func _handle_select_character(sender_id: int, payload: Dictionary) -> void:
 	if room == null:
 		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
 		return
-	if room.state != Room.State.LOBBY:
+	if not room.accepts_lobby_actions():
 		_send_error(sender_id, NetProtocol.ERROR_GAME_ALREADY_STARTED, "이미 게임이 시작되어 캐릭터를 바꿀 수 없습니다.")
 		return
 
@@ -353,7 +418,7 @@ func _handle_ready(sender_id: int, payload: Dictionary) -> void:
 	if room == null:
 		_send_error(sender_id, NetProtocol.ERROR_ROOM_NOT_FOUND, "방에 들어가 있지 않습니다.")
 		return
-	if room.state != Room.State.LOBBY:
+	if not room.accepts_lobby_actions():
 		_send_error(sender_id, NetProtocol.ERROR_GAME_ALREADY_STARTED, "이미 게임이 시작되었습니다.")
 		return
 
@@ -399,22 +464,29 @@ func _set_player_count_error_message(code: String) -> String:
 			return "인원수를 바꿀 수 없습니다."
 
 
+## 2-6(§6) - 명시적으로 나가는 것이므로 게임 도중이라도 재접속 유예 없이
+## 바로 확정 이탈 처리한다(voluntary=true → RoomManager.remove_peer()가
+## 그레이스 없이 완전히 슬롯을 비움).
 func _handle_leave(sender_id: int, _payload: Dictionary) -> void:
-	_remove_peer_and_notify(sender_id, "left")
+	_remove_peer_and_notify(sender_id, "left", true)
 
 
-func _remove_peer_and_notify(peer_id: int, reason: String) -> void:
-	var result := room_manager.remove_peer(peer_id)
+func _remove_peer_and_notify(peer_id: int, reason: String, voluntary: bool) -> void:
+	var result := room_manager.remove_peer(peer_id, voluntary, Time.get_ticks_msec())
 	var room = result["room"]
 	var slot_index: int = result["slot_index"]
 	if room != null and slot_index != -1:
 		_broadcast_room(room, NetProtocol.MSG_PLAYER_LEFT, {"player_index": slot_index, "reason": reason})
 
 
-## 정원이 다 차고 전원이 준비되면 자동으로 캐릭터 팩 전송 단계로 들어간다(§3).
+## 정원이 다 차고 전원이 준비되면 자동으로 캐릭터 팩 전송 단계로 들어간다
+## (§3). 2-6B - REMATCHING(재대전 대기)도 같은 조건으로 다음 판 전송
+## 단계에 들어간다(`accepts_lobby_actions()`).
 func _maybe_start_game(room: Room) -> void:
-	if room.state != Room.State.LOBBY or not room.all_ready():
+	if not room.accepts_lobby_actions() or not room.all_ready():
 		return
+	if room.state == Room.State.REMATCHING:
+		room.clear_rematch_deadline()
 	_begin_transferring(room)
 
 
@@ -491,6 +563,98 @@ func _warn_if_transfer_stalled(room: Room, now: int) -> void:
 	room.transfer_next_stall_warning_msec = now + stall_ms
 
 
+## 2-6(§6) - 매 프레임 IN_GAME 방들을 진행시킨다: (1) 재접속 유예가 끝난
+## 슬롯을 "확정 이탈"로 넘기고 알린다, (2) 지금 턴인 사람이 확정 이탈이면
+## 즉시, 아니면 60초가 지났을 때 auto_confirm_least_damaging()으로 대신
+## 진행시킨다, (3) 1초 주기로 턴/재접속 카운트다운을 방송한다. 방 하나가
+## 막혀도 나머지 방에 영향이 없도록 방마다 독립적으로 처리한다
+## (_service_transferring_rooms()와 같은 패턴).
+func _service_in_game_rooms(now: int) -> void:
+	for room in room_manager.rooms.values():
+		if room.state != Room.State.IN_GAME or room.game_state.game_over:
+			continue
+
+		for i in room.slots.size():
+			if room.slots[i] == null:
+				continue
+			if room.is_grace_expired(i, now):
+				room.mark_slot_departed(i)
+				print("[서버] 방 %s: 슬롯 %d 재접속 유예(%.0f초) 종료 - 확정 이탈" % [room.code, i, NetProtocol.RECONNECT_GRACE_MSEC / 1000.0])
+				_broadcast_room(room, NetProtocol.MSG_PLAYER_LEFT, {"player_index": i, "reason": "timeout"})
+
+		var current: int = room.game_state.current_player
+		# slots[current] == null은 게임 도중 명시적으로 leave()한 경우다
+		# (RoomManager.remove_peer()가 그레이스 없이 완전히 비움) - 이때는
+		# reconnect_token도 같이 사라져서 다시 돌아올 수 없으므로 PAST_GRACE와
+		# 똑같이(영원히) 즉시 자동 처리 대상이다.
+		var current_gone: bool = room.slots[current] == null or room.slot_connection_state[current] == Room.ConnectionState.PAST_GRACE
+		if current_gone or room.is_turn_timed_out(now):
+			print("[서버] 방 %s: 슬롯 %d 턴 자동 처리(%s)" % [room.code, current, "이탈" if current_gone else "60초 시간 초과"])
+			_mutate_and_broadcast(room, func(): room.game_state.auto_confirm_least_damaging(current))
+			if room.game_state.game_over:
+				room.clear_turn_deadline()
+				room.begin_rematch_wait(now)
+				continue
+
+		if now < _next_timer_broadcast_msec.get(room.code, 0):
+			continue
+		_next_timer_broadcast_msec[room.code] = now + 1000
+
+		var turn_player: int = room.game_state.current_player
+		if room.turn_deadline_msec > 0 and room.slots[turn_player] != null and room.slot_connection_state[turn_player] != Room.ConnectionState.PAST_GRACE:
+			var turn_secs := maxi(0, int(ceil((room.turn_deadline_msec - now) / 1000.0)))
+			_broadcast_room(room, NetProtocol.MSG_PLAYER_TIMER, {"player_index": turn_player, "kind": "turn", "seconds_left": turn_secs})
+
+		for i in room.slots.size():
+			if room.slots[i] != null and room.slot_connection_state[i] == Room.ConnectionState.GRACE_PERIOD:
+				var reconnect_secs := maxi(0, int(ceil((room.slot_disconnect_deadline_msec[i] - now) / 1000.0)))
+				_broadcast_room(room, NetProtocol.MSG_PLAYER_TIMER, {"player_index": i, "kind": "reconnect", "seconds_left": reconnect_secs})
+
+
+## 2-6B(같은 방에서 재대전) - 매 프레임 REMATCHING 방들을 진행시킨다.
+## 대기 상한(NetProtocol.REMATCH_READY_TIMEOUT_MSEC, 2분)을 넘기면
+## "한 판 더"를 안 누른(연결 여부와 무관 - 버튼을 안 눌렀거나 끊긴 채
+## 안 돌아온 슬롯 전부 포함) 자리를 내보낸다. 그 뒤로는 원래 로비처럼
+## 무기한 대기로 자연히 넘어간다(다시 채워지고 전원 준비되면
+## _maybe_start_game()이 다음 판을 시작함).
+func _service_rematch_rooms(now: int) -> void:
+	for room in room_manager.rooms.values():
+		if room.state != Room.State.REMATCHING:
+			continue
+
+		if room.is_rematch_wait_timed_out(now):
+			var not_ready_slots: Array = []
+			for i in room.slots.size():
+				var slot: Dictionary = room.slots[i]
+				if slot != null and not slot["ready"]:
+					not_ready_slots.append(i)
+
+			# 방송을 전부 먼저 끝내고 나서 비운다(2개 이상 슬롯이 한 번에
+			# 시간 초과될 수 있음) - _broadcast_room()은 그 순간의
+			# room.slots를 그대로 훑으므로, 한 슬롯을 먼저 비운 채로 다음
+			# 슬롯의 이탈을 방송하면 이미 비워진 슬롯의 주인은(소켓은 아직
+			# 열려 있는데도) 그 뒤에 나가는 사람들의 player_left를 못 받는다
+			# (실제 소켓 검증에서 확인한 버그 - 2명이 동시에 타임아웃되면
+			# 첫 번째로 처리된 사람이 두 번째 사람의 퇴장 알림을 놓쳤다).
+			for i in not_ready_slots:
+				print("[서버] 방 %s: 슬롯 %d 재대전 대기(%.0f초) 시간 초과 - 이탈 처리" % [room.code, i, NetProtocol.REMATCH_READY_TIMEOUT_MSEC / 1000.0])
+				_broadcast_room(room, NetProtocol.MSG_PLAYER_LEFT, {"player_index": i, "reason": "timeout"})
+			for i in not_ready_slots:
+				room_manager.force_vacate_slot(room, i)
+			room.clear_rematch_deadline()
+			continue
+
+		if now < _next_timer_broadcast_msec.get(room.code, 0):
+			continue
+		_next_timer_broadcast_msec[room.code] = now + 1000
+
+		var rematch_secs := maxi(0, int(ceil((room.rematch_deadline_msec - now) / 1000.0)))
+		for i in room.slots.size():
+			var slot: Dictionary = room.slots[i]
+			if slot != null and not slot["ready"]:
+				_broadcast_room(room, NetProtocol.MSG_PLAYER_TIMER, {"player_index": i, "kind": "rematch", "seconds_left": rematch_secs})
+
+
 ## 큐에서 다음 해시를 꺼내 전송을 시작하거나(방 전체에 pack_upload_requested
 ## 방송 - 소유자는 이걸 보고 업로드를 시작하고, 나머지는 "누구를 기다리는지"
 ## UI를 갱신한다), 큐가 비었으면 AWAITING_READY로 들어간다(게임 시작은
@@ -524,9 +688,13 @@ func _handle_pack_ready(sender_id: int, _payload: Dictionary) -> void:
 
 ## game_started 다음에 game_state.start_turn()을 실제로 호출해서 첫 턴을
 ## 연다 - 이게 없으면 turn_started(0)도 안 나가고 첫 스냅샷도 "아무것도
-## 시작 안 한" 상태로 나간다.
+## 시작 안 한" 상태로 나간다. 2-6B - start_turn() 전에 항상
+## room.start_new_game()으로 완전히 새 GameState를 만든다(처음 게임이든
+## 재대전이든 예외 없이) - 지난 판 점수/굴림 상태가 한 조각도 안 남게
+## 하기 위함이다.
 func _finish_transferring(room: Room) -> void:
 	room.state = Room.State.IN_GAME
+	room.start_new_game()
 	print("[서버] 방 %s 게임 시작 (인원 %d)" % [room.code, room.capacity])
 	_broadcast_room(room, NetProtocol.MSG_GAME_STARTED, {"player_count": room.capacity})
 
@@ -727,6 +895,7 @@ func _handle_request_roll(sender_id: int, _payload: Dictionary) -> void:
 		_send_error(sender_id, err, _turn_error_message(err, "리롤 횟수를 모두 사용했습니다."))
 		return
 
+	room.reset_turn_deadline(Time.get_ticks_msec())
 	_mutate_and_broadcast(room, func(): room.game_state.roll())
 
 
@@ -746,6 +915,7 @@ func _handle_request_hold(sender_id: int, payload: Dictionary) -> void:
 		_send_error(sender_id, err, _turn_error_message(err, "주사위 번호가 올바르지 않거나 아직 굴리지 않았습니다."))
 		return
 
+	room.reset_turn_deadline(Time.get_ticks_msec())
 	_mutate_and_broadcast(room, func(): room.game_state.toggle_lock(index))
 
 
@@ -765,9 +935,11 @@ func _handle_request_score(sender_id: int, payload: Dictionary) -> void:
 		_send_error(sender_id, err, _turn_error_message(err, "그 칸은 지금 확정할 수 없습니다(이미 확정됐거나 아직 안 굴렸습니다)."))
 		return
 
+	room.reset_turn_deadline(Time.get_ticks_msec())
 	_mutate_and_broadcast(room, func(): room.game_state.confirm_category(category))
 	if room.game_state.game_over:
-		room.state = Room.State.ENDED
+		room.clear_turn_deadline()
+		room.begin_rematch_wait(Time.get_ticks_msec())
 
 
 func _turn_error_message(code: String, invalid_argument_message: String) -> String:
@@ -852,10 +1024,24 @@ func _on_ge_turn_ended(player_index: int) -> void:
 	_pending_events.append({"type": NetProtocol.MSG_TURN_ENDED, "payload": {"player_index": player_index}})
 
 
+## 2-6(§6 "턴 제한 시간") - 새 턴이 시작될 때마다 60초 카운트다운을 다시
+## 잡는다. 단, 그 슬롯이 이미 "확정 이탈"(PAST_GRACE)이면 60초를 기다릴
+## 이유가 없다 - 하지만 여기서 바로 auto_confirm_least_damaging()을 또
+## 부르면 같은 _mutate_and_broadcast() 호출 스택 안에서 재귀적으로
+## turn_started가 또 emit될 수 있으므로, 데드라인을 이미 지난 값으로만
+## 세팅해두고 실제 처리는 _service_in_game_rooms()가 다음 프레임에
+## "턴 시간 초과"로 자연스럽게 집어서 하게 한다(한 프레임 늦을 뿐 체감
+## 차이는 없다).
 func _on_ge_turn_started(player_index: int) -> void:
 	if _active_room == null:
 		return
 	_pending_events.append({"type": NetProtocol.MSG_TURN_STARTED, "payload": {"player_index": player_index}})
+
+	var now := Time.get_ticks_msec()
+	if _active_room.slots[player_index] == null or _active_room.slot_connection_state[player_index] == Room.ConnectionState.PAST_GRACE:
+		_active_room.turn_deadline_msec = now - 1
+	else:
+		_active_room.reset_turn_deadline(now)
 
 
 func _on_ge_game_ended(winners: Array, scores: Array) -> void:

@@ -18,6 +18,20 @@ signal game_play_started(client: GameClient, my_index: int, profiles: Array[Char
 ## set_my_profile()로 돌려준다(2-4B). 새 캐릭터 선택 화면을 따로 안 만든다.
 signal character_select_requested()
 
+# 2-6(연결 끊김/재접속, docs/multiplayer.md §6).
+## 접속 상태 문구가 바뀔 때마다 emit한다 - PackTransferClient의
+## progress_changed/get_status_text()와 같은 패턴. Main.gd가 게임 화면
+## 위의 재접속 배너 표시 여부/문구를 이걸로 갱신한다.
+signal connection_status_changed()
+## 게임 도중 끊겼다가 같은 세션으로 다시 붙는 데 성공했을 때(로비 패널을
+## 다시 보여주지 않는 조용한 재접속) emit한다 - Main.gd는 배너만 지우면
+## 된다(화면 전환 없음).
+signal game_reconnected()
+## 재접속 재시도를 상한(NetProtocol.MAX_RECONNECT_ATTEMPTS)까지 다
+## 써버리고도 못 붙었을 때 emit한다 - Main.gd가 "로비로 나가기" 선택지를
+## 보여준다.
+signal reconnect_exhausted()
+
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8910"
 
 var _client: GameClient = GameClient.new()
@@ -74,6 +88,24 @@ var _players: Dictionary = {}  # player_index(int) -> {meta: Dictionary, ready: 
 var _pending_action: Callable = Callable()
 var _connected := false
 
+# 2-6(§6) - 첫 접속(서버 기상 대기)/게임 도중 재접속 공용 재시도 로직.
+var _reconnect_backoff := ReconnectBackoff.new()
+## SessionStore에 저장하는 것과 별개로 살아있는 동안 바로 쓸 수 있게 들고
+## 있는다(재접속 시 join_room(code, token)에 그대로 씀).
+var _my_reconnect_token: String = ""
+## 게임 화면으로 넘어간 적이 한 번이라도 있으면 true - 그 뒤의 disconnected는
+## "로비 이탈"이 아니라 "게임 도중 끊김"으로 다뤄야 한다(재시도 대상).
+var _game_already_entered := false
+## 지금 진행 중인 connect_to_server() 재시도가 "게임 도중 끊겨서 돌아오는
+## 것"인지 구분한다(문구/성공 시 처리가 다름 - 로비 재진입이 아니라 조용히
+## 이어붙기만 함).
+var _reconnecting_after_disconnect := false
+## Main.gd의 시작 다이얼로그에서 "예"를 눌러 이전 세션으로 복귀를 시도
+## 중인지(2-6) - 이때는 room_joined가 와도 로비 패널을 보여주지 않고
+## 곧바로 게임 화면 진입 절차(캐릭터 팩 확인 → game_play_started)를 탄다.
+var _resuming_session := false
+var _connection_status_text := ""
+
 
 func _ready() -> void:
 	add_child(_client)
@@ -122,6 +154,10 @@ func _ready() -> void:
 	_client.game_started.connect(_on_game_started)
 	_client.server_error.connect(_on_server_error)
 	_client.disconnected.connect(_on_disconnected)
+	# 2-6B(같은 방에서 재대전) - "rematch" 종류의 카운트다운만 여기서
+	# 받는다("turn"/"reconnect"는 게임 화면 쪽 관심사라 Main.gd가 직접
+	# _client를 구독한다, 2-6).
+	_client.player_timer.connect(_on_player_timer)
 
 	_show_connect_panel()
 
@@ -151,6 +187,31 @@ func set_my_profile(profile: CharacterProfile) -> void:
 	_refresh_my_character_display()
 
 
+## 2-6B(같은 방에서 재대전) - Main.gd의 [한 판 더] → CharacterSelectScreen
+## 흐름이 확정되면 이걸 부른다(로비 진입 전의 평범한 캐릭터 사전 선택은
+## 그대로 set_my_profile()만 쓴다 - 그때는 아직 방이 없어서 보낼 곳이
+## 없다). 이미 방 안이므로 캐릭터 선택 직후 바로 전송하고, "캐릭터 선택
+## 화면으로 돌아갔다가 준비 상태가 된다"는 사용자 표현 그대로 준비까지
+## 자동으로 보낸다(따로 [준비 완료]를 또 누르게 하지 않음). 해시가
+## 지난 판과 같으면 전송 자체가 안 걸린다(2-5 캐시) - 여기서 새로 할 일이
+## 없다.
+func confirm_rematch_character(profile: CharacterProfile) -> void:
+	set_my_profile(profile)
+	_client.select_character(_my_character_meta())
+	_client.set_ready(true)
+
+
+## 2-6B - 재대전 대기 카운트다운(kind="rematch")만 로비 상태 문구에
+## 표시한다. "turn"/"reconnect"는 게임 화면 몫이라 여기서는 무시한다.
+## 로비 패널이 안 보일 때(예: 아직 캐릭터 선택 화면에 있을 때)는 다음에
+## 로비 패널을 다시 보여줄 때 자연히 최신 값으로 덮어써지므로 무시해도
+## 된다.
+func _on_player_timer(_player_index: int, kind: String, seconds_left: int) -> void:
+	if kind != "rematch" or not _lobby_panel.visible:
+		return
+	_lobby_status_label.text = "다음 판 대기 중 (%d초 안에 준비 안 하면 나간 것으로 처리됩니다)" % seconds_left
+
+
 ## character_select_panel.gd의 슬롯 썸네일 갱신과 같은 방식
 ## (CharacterPortrait.resolve_thumbnail_texture()/TextureFit.fit()) -
 ## 새 로직 없이 그대로 재사용한다.
@@ -171,6 +232,11 @@ func _show_connect_panel() -> void:
 	_room_code = ""
 	_capacity = 0
 	_players.clear()
+	_game_already_entered = false
+	_reconnecting_after_disconnect = false
+	_resuming_session = false
+	_reconnect_backoff.reset()
+	_set_connection_status("")
 
 	_create_room_count_row.visible = false
 	_join_room_row.visible = false
@@ -190,14 +256,32 @@ func _show_lobby_panel() -> void:
 ## 아직 서버에 연결/hello 확인이 안 됐으면 먼저 연결하고, 끝나면 action을
 ## 실행한다. 이미 연결되어 있으면 바로 실행한다 - [방 만들기]/[방 참가]
 ## 양쪽에서 같은 흐름을 타므로 여기 하나로 모았다.
+##
+## 2-6(§6, 배포 환경 - Render 무료 플랜은 유휴 시 서버가 잠들고 깨어나는
+## 데 최대 1분 걸림) - 연결 실패(connection_failed)가 오면
+## ReconnectBackoff로 자동 재시도한다. 게임 도중 재접속과 같은
+## ReconnectBackoff/재시도 루프(_on_connection_failed)를 공유한다.
 func _connect_and_then(action: Callable) -> void:
 	if _connected:
 		action.call()
 		return
 
+	_reconnect_backoff.reset()
 	_pending_action = action
+	_set_connection_status("")
 	_connect_status_label.text = "서버에 연결하는 중..."
 	_client.connect_to_server(_server_address_edit.text.strip_edges())
+
+
+func _set_connection_status(text: String) -> void:
+	_connection_status_text = text
+	connection_status_changed.emit()
+
+
+## Main.gd가 게임 화면 위 재접속 배너에 표시할 문구 - 비어 있으면 배너를
+## 숨긴다(PackTransferClient.get_status_text()와 같은 패턴).
+func get_connection_status_text() -> String:
+	return _connection_status_text
 
 
 func _on_connect_back_pressed() -> void:
@@ -220,6 +304,7 @@ func _on_join_confirm_pressed() -> void:
 
 func _on_leave_pressed() -> void:
 	_client.leave()
+	SessionStore.clear()
 	_show_connect_panel()
 
 
@@ -232,40 +317,106 @@ func _on_host_set_player_count(count: int) -> void:
 	_client.set_player_count(count)
 
 
+## 2-6(§6) - 첫 접속(서버 기상 대기)/게임 도중 재접속 공용 재시도 루프.
+## ReconnectBackoff가 상한에 닿을 때까지 지수 백오프로 계속 다시 붙어본다.
 func _on_connection_failed(reason: String) -> void:
+	if _reconnect_backoff.has_attempts_left():
+		var attempt_no := _reconnect_backoff.attempt + 1
+		var delay := _reconnect_backoff.next_delay_sec()
+		var label := "게임 도중 재접속 시도 중" if _reconnecting_after_disconnect else "서버를 깨우는 중입니다(최대 1분)"
+		var status_text := "%s - 재시도 %d/%d, %.0f초 후" % [label, attempt_no, NetProtocol.MAX_RECONNECT_ATTEMPTS, delay]
+		_connect_status_label.text = status_text
+		_set_connection_status(status_text)
+		await get_tree().create_timer(delay).timeout
+		_client.connect_to_server(_server_address_edit.text.strip_edges())
+		return
+
+	var msg := reason if reason != "" else "서버에 연결할 수 없습니다."
+	_connect_status_label.text = msg
 	_pending_action = Callable()
-	_connect_status_label.text = reason
+	_set_connection_status("")
+	if _reconnecting_after_disconnect:
+		_reconnecting_after_disconnect = false
+		reconnect_exhausted.emit()
 
 
 func _on_hello_acknowledged() -> void:
 	_connected = true
+	_reconnect_backoff.reset()
 	if _pending_action.is_valid():
 		var action := _pending_action
 		_pending_action = Callable()
 		action.call()
 
 
-func _on_room_created(code: String, player_count: int, _reconnect_token: String) -> void:
+func _on_room_created(code: String, player_count: int, reconnect_token: String) -> void:
 	_room_code = code
 	_capacity = player_count
 	_my_index = 0
 	_players = {0: {"meta": {}, "ready": false}}
-	# 발급된 토큰은 저장까지만 한다(2-6에서 실제 재접속 매칭 구현) - 지금은
-	# 새로고침 후 복귀 UI가 없어도 저장은 해둔다.
-	SessionStore.save(code, _reconnect_token, 0)
+	_my_reconnect_token = reconnect_token
+	SessionStore.save(code, reconnect_token, 0)
 	_client.select_character(_my_character_meta())
 	_show_lobby_panel()
 
 
+## 2-6(§6) - 이 핸들러는 세 가지 경우 모두를 받는다: (1) 평범한 새 참가
+## (2) 게임 도중 끊겼다가 같은 세션으로 조용히 돌아온 경우
+## (_reconnecting_after_disconnect) (3) 앱을 새로 켜서(F5 등) 저장된
+## 세션으로 복귀를 시도한 경우(_resuming_session). (2)/(3)는 로비 패널을
+## 다시 보여주지 않는다 - 이미 게임이 진행 중이라 로비로 돌아갈 이유가 없다.
 func _on_room_joined(players: Array, my_index: int, reconnect_token: String, player_count: int) -> void:
 	_my_index = my_index
 	_capacity = player_count
 	_players.clear()
 	for entry in players:
 		_players[int(entry["player_index"])] = {"meta": entry.get("meta", {}), "ready": entry.get("ready", false)}
+	_my_reconnect_token = reconnect_token
 	SessionStore.save(_room_code, reconnect_token, my_index)
+
+	if _reconnecting_after_disconnect:
+		_reconnecting_after_disconnect = false
+		_reconnect_backoff.reset()
+		_set_connection_status("")
+		game_reconnected.emit()
+		return
+
+	if _resuming_session:
+		_resuming_session = false
+		# 로비 종료 흐름은 _on_transferring_started()가 begin()을 이미
+		# 불러뒀지만, 복귀 흐름은 그 이벤트를 다시 못 받으므로(이미 지난
+		# 사건) 여기서 직접 불러 필요한 팩 요청을 시작한다. 방이 아직
+		# TRANSFERRING 단계일 수도 있지만(새로고침 타이밍이 아주 나쁜
+		# 경우), 그 경우도 포함해 "이미 IN_GAME"으로 간주하고 곧장 게임
+		# 화면 진입 절차를 탄다 - 극히 드문 경계 상황이라 정교하게 나누지
+		# 않는다(그 경우 첫 실제 상태 스냅샷이 도착할 때까지 점수판이
+		# 잠깐 기본값으로 보일 수 있는 정도).
+		_pack_transfer.begin(_my_index, _my_profile, _my_pack_bytes, _my_pack_hash, _players)
+		await _resolve_profiles_and_enter_game(player_count)
+		return
+
 	_client.select_character(_my_character_meta())
 	_show_lobby_panel()
+
+
+## 2-6(§6) - Main.gd가 시작 시 저장된 세션을 발견하고 사용자가 "예"를
+## 눌렀을 때 부른다. 실패(방이 이미 정리됨 등)해도 사용자에게 알릴 필요는
+## 없다(§6 - "혹시 몰라서" 물어본 것이라 실패도 자연스러운 결과) -
+## _on_server_error()가 방 화면에 문구만 남기고, 재시도 소진 시엔
+## reconnect_exhausted가 그대로 처리한다.
+func attempt_session_resume(saved: Dictionary) -> void:
+	_room_code = str(saved.get("code", ""))
+	_my_reconnect_token = str(saved.get("reconnect_token", ""))
+	if _room_code.is_empty() or _my_reconnect_token.is_empty():
+		SessionStore.clear()
+		return
+
+	_resuming_session = true
+	_reconnect_backoff.reset()
+	_connect_status_label.text = "이전 게임에 다시 연결하는 중..."
+	_pending_action = func() -> void:
+		_client.join_room(_room_code, _my_reconnect_token)
+	_client.connect_to_server(_server_address_edit.text.strip_edges())
 
 
 ## 서버가 최종 검증/기본값 부여를 다시 하므로(server_main.gd, 원칙 6 -
@@ -366,10 +517,22 @@ func _append_transfer_debug_log(text: String) -> void:
 ## 있었다). "게임 화면으로 안 넘어가는 경로는 없다"가 여기서 보장된다.
 func _on_game_started(player_count: int) -> void:
 	print("[온라인] 게임 시작! (%d인)" % player_count)
+	await _resolve_profiles_and_enter_game(player_count)
+
+
+## 로비 종료(_on_game_started)와 세션 복귀(_on_room_joined의 _resuming_session
+## 분기, attempt_session_resume()) 양쪽이 공유하는 꼬리 부분(2-6) - "이제
+## 실제 게임 화면으로 넘어갈 준비를 한다"는 점이 똑같다: 아직 처리 중인
+## 캐릭터 팩 해시가 있으면 마저 기다리고, 슬롯별 프로필을 조립해
+## game_play_started를 emit한다. 복귀 흐름은 이 함수를 부르기 전에
+## _pack_transfer.begin()을 직접 호출해서 필요한 팩 요청을 먼저 시작해둬야
+## 한다(로비 종료 흐름은 _on_transferring_started()가 이미 해뒀음).
+func _resolve_profiles_and_enter_game(player_count: int) -> void:
+	_game_already_entered = true
 
 	if not _pack_transfer.is_all_resolved():
 		if BuildInfo.DEBUG_MODE:
-			_append_transfer_debug_log("game_started 도착했지만 아직 처리 중인 해시가 남음(서버의 pack_ready 대기를 놓쳤거나 타임아웃) - 로컬에서 마저 기다림")
+			_append_transfer_debug_log("아직 처리 중인 해시가 남음(서버의 pack_ready 대기를 놓쳤거나 타임아웃, 또는 방금 재접속) - 로컬에서 마저 기다림")
 		await _pack_transfer.wait_until_all_resolved()
 
 	var profiles: Array[CharacterProfile] = []
@@ -383,7 +546,7 @@ func _on_game_started(player_count: int) -> void:
 			_debug_log_slot_connection(i, resolved)
 			continue
 		if BuildInfo.DEBUG_MODE:
-			_append_transfer_debug_log("[P%d] game_started 도착 시점에 PackTransferClient.get_profile(%d)이 아직 null - 전송/검증이 안 끝난 상태에서 슬롯이 확정됨(기본 프로필로 대체)" % [i + 1, i])
+			_append_transfer_debug_log("[P%d] PackTransferClient.get_profile(%d)이 아직 null - 전송/검증이 안 끝난 상태에서 슬롯이 확정됨(기본 프로필로 대체)" % [i + 1, i])
 		var profile := CharacterProfile.new()
 		var display_name: String = _players.get(i, {}).get("meta", {}).get("display_name", "")
 		profile.display_name = display_name if not display_name.is_empty() else "플레이어 %d" % (i + 1)
@@ -412,16 +575,47 @@ func _debug_log_slot_connection(player_index: int, profile: CharacterProfile) ->
 	])
 
 
+## 2-6(§6) - 세션 복귀 시도가 서버 쪽 사유(방이 이미 정리됨 등)로
+## 실패하면 조용히 포기한다("혹시 몰라서" 물어본 것이라 실패도 자연스러운
+## 결과 - 사용자에게 에러 문구를 보여줄 필요가 없다). 저장된 세션도
+## 지워서 다음에 또 물어보지 않게 한다.
 func _on_server_error(_code: String, message: String) -> void:
+	if _resuming_session:
+		_resuming_session = false
+		SessionStore.clear()
+		_show_connect_panel()
+		return
+	if _reconnecting_after_disconnect:
+		# 소켓은 다시 붙었지만 서버가 그 방을 이미 정리한 경우(서버 재시작
+		# 등, §9 범위 밖) - 재시도로는 해결 안 되는 실패이므로 바로 포기한다.
+		_reconnecting_after_disconnect = false
+		SessionStore.clear()
+		_set_connection_status("")
+		reconnect_exhausted.emit()
+		return
 	if _lobby_panel.visible:
 		_lobby_status_label.text = message
 	else:
 		_connect_status_label.text = message
 
 
+## 2-6(§6) - 게임 화면에 한 번이라도 들어간 뒤(_game_already_entered)의
+## 끊김은 "로비 이탈"이 아니라 "게임 도중 끊김"이다 - 로비로 튕기지 않고
+## (_show_connect_panel()을 안 부름) 조용히 재접속을 시도한다. Main.gd는
+## connection_status_changed로 게임 화면 위 배너만 갱신한다. 게임 시작
+## 전(로비 단계) 끊김은 기존 동작(연결 패널로 되돌아감) 그대로 둔다.
 func _on_disconnected() -> void:
-	_show_connect_panel()
-	_connect_status_label.text = "서버와의 연결이 끊어졌습니다."
+	if not _game_already_entered:
+		_show_connect_panel()
+		_connect_status_label.text = "서버와의 연결이 끊어졌습니다."
+		return
+
+	_reconnecting_after_disconnect = true
+	_reconnect_backoff.reset()
+	_set_connection_status("연결이 끊어졌습니다. 재접속 시도 중...")
+	_pending_action = func() -> void:
+		_client.join_room(_room_code, _my_reconnect_token)
+	_client.connect_to_server(_server_address_edit.text.strip_edges())
 
 
 func _lowest_occupied_index() -> int:

@@ -219,6 +219,18 @@ theme_override_font_sizes/font_size = 24
 text = "현재 턴: 플레이어 1"
 horizontal_alignment = 1
 
+[node name="TurnCountdownLabel" type="Label" parent="GameScreen/Margin/MainHBox/RightColumn"]
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(1, 0.8, 0.4, 1)
+horizontal_alignment = 1
+
+[node name="LeaveToLobbyButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn"]
+visible = false
+layout_mode = 2
+text = "로비로 나가기"
+
 [node name="DiceAndControls" type="VBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=994061739]
 layout_mode = 2
 theme_override_constants/separation = 6
@@ -361,6 +373,12 @@ custom_minimum_size = Vector2(140, 44)
 layout_mode = 2
 text = "다시 하기"
 
+[node name="RematchButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow"]
+visible = false
+custom_minimum_size = Vector2(140, 44)
+layout_mode = 2
+text = "한 판 더"
+
 [node name="ToTitleButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow" unique_id=643518459]
 custom_minimum_size = Vector2(140, 44)
 layout_mode = 2
@@ -383,6 +401,41 @@ initial_position = 1
 ok_button_text = "그만두기"
 dialog_text = "정말 그만두시겠습니까? 지금까지의 진행 상황은 사라집니다."
 cancel_button_text = "취소"
+
+[node name="ReconnectOverlay" type="Control" parent="."]
+visible = false
+anchors_preset = 0
+anchor_right = 1.0
+mouse_filter = 2
+
+[node name="Banner" type="PanelContainer" parent="ReconnectOverlay"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 44.0
+mouse_filter = 1
+
+[node name="HBox" type="HBoxContainer" parent="ReconnectOverlay/Banner"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="StatusLabel" type="Label" parent="ReconnectOverlay/Banner/HBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "연결이 끊어졌습니다. 재접속 시도 중..."
+
+[node name="OverlayLeaveButton" type="Button" parent="ReconnectOverlay/Banner/HBox"]
+visible = false
+layout_mode = 2
+text = "로비로 나가기"
+
+[node name="SessionResumeDialog" type="ConfirmationDialog" parent="."]
+title = "이전 게임"
+initial_position = 1
+ok_button_text = "돌아가기"
+dialog_text = "진행 중이던 게임에 돌아가시겠어요?"
+cancel_button_text = "아니오"
 
 [node name="DebugHotkeys" type="Node" parent="." unique_id=1371383245]
 script = ExtResource("2_script")

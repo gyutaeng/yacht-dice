@@ -58,6 +58,12 @@ signal pack_transfer_failed(hash: String, reason: String)
 ## 전달한다(방 전체 방송이 아니라 소유자인 나에게만 온다).
 signal pack_chunks_requested(hash: String, sequences: Array[int])
 
+# 2-6(연결 끊김/재접속/턴 타임아웃, docs/multiplayer.md §6).
+signal player_reconnected(player_index: int)
+## kind는 "turn"(그 슬롯이 지금 턴 제한 카운트다운 중) 또는
+## "reconnect"(그 슬롯이 재접속 유예 카운트다운 중).
+signal player_timer(player_index: int, kind: String, seconds_left: int)
+
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
 var _peer := WebSocketMultiplayerPeer.new()
@@ -168,8 +174,10 @@ func create_room(player_count: int) -> void:
 	_send(NetProtocol.MSG_CREATE_ROOM, {"player_count": player_count})
 
 
-func join_room(code: String) -> void:
-	_send(NetProtocol.MSG_JOIN_ROOM, {"code": code})
+## reconnect_token은 게임 도중(TRANSFERRING/IN_GAME) 끊겼다 돌아올 때만
+## 채운다 - 로비 단계의 평범한 참가는 빈 문자열 그대로 보낸다(§6).
+func join_room(code: String, reconnect_token: String = "") -> void:
+	_send(NetProtocol.MSG_JOIN_ROOM, {"code": code, "reconnect_token": reconnect_token})
 
 
 func select_character(meta: Dictionary) -> void:
@@ -364,6 +372,14 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 			pack_transfer_failed.emit(str(payload.get("hash", "")), str(payload.get("reason", "")))
 		NetProtocol.MSG_PACK_CHUNKS_REQUESTED:
 			pack_chunks_requested.emit(str(payload.get("hash", "")), _to_int_array(payload.get("sequences", [])))
+		NetProtocol.MSG_PING:
+			# 2-6(§6) - 시그널 없이 바로 응답한다. "나 아직 살아있다"는
+			# 확인일 뿐이라 UI가 알 필요 없는 배선 수준의 응답이다.
+			_send(NetProtocol.MSG_PONG, {})
+		NetProtocol.MSG_PLAYER_RECONNECTED:
+			player_reconnected.emit(int(payload.get("player_index", -1)))
+		NetProtocol.MSG_PLAYER_TIMER:
+			player_timer.emit(int(payload.get("player_index", -1)), str(payload.get("kind", "")), int(payload.get("seconds_left", 0)))
 		NetProtocol.MSG_ERROR:
 			var code := str(payload.get("code", ""))
 			if code == NetProtocol.ERROR_PROTOCOL_MISMATCH:

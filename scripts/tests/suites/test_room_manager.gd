@@ -26,6 +26,18 @@ func run(r) -> void:
 	_test_empty_room_auto_cleanup(r)
 	_test_rooms_get_different_seeds(r)
 
+	_test_involuntary_disconnect_in_game_keeps_slot(r)
+	_test_involuntary_disconnect_does_not_empty_room(r)
+	_test_voluntary_leave_in_game_fully_vacates(r)
+	_test_involuntary_disconnect_in_lobby_fully_vacates(r)
+	_test_reconnect_with_valid_token_restores_slot(r)
+	_test_reconnect_with_wrong_token_is_room_full(r)
+	_test_reconnect_with_empty_token_is_room_full(r)
+
+	_test_join_room_during_rematching_allows_fresh_join(r)
+	_test_join_room_during_rematching_prefers_token_match(r)
+	_test_involuntary_disconnect_during_rematching_keeps_slot(r)
+
 
 func _test_room_code_shape(r) -> void:
 	var room_manager := RoomManager.new()
@@ -72,6 +84,10 @@ func _test_join_room_full(r) -> void:
 	r.expect_eq("꽉 찬 방은 ROOM_FULL", result, NetProtocol.ERROR_ROOM_FULL)
 
 
+## 2-6(§6) - 게임이 시작된 뒤 토큰 없이 들어오려 하면 "자리가 없다"로
+## 취급해 ROOM_FULL로 거부한다(재접속 토큰이 있으면 다른 경로 -
+## test_room_reconnect.gd 참고). 예전엔 GAME_ALREADY_STARTED였지만, §6
+## 문구("자리가 없으면 거부")에 맞춰 통일했다.
 func _test_join_room_after_start(r) -> void:
 	var room_manager := RoomManager.new()
 	var room := room_manager.create_room(2, 1)
@@ -79,7 +95,7 @@ func _test_join_room_after_start(r) -> void:
 	room.state = Room.State.IN_GAME
 
 	var result = room_manager.join_room(room.code, 3)
-	r.expect_eq("게임 시작 후 참가는 GAME_ALREADY_STARTED", result, NetProtocol.ERROR_GAME_ALREADY_STARTED)
+	r.expect_eq("게임 시작 후 토큰 없이 참가는 ROOM_FULL", result, NetProtocol.ERROR_ROOM_FULL)
 
 
 func _test_set_player_count_success(r) -> void:
@@ -149,6 +165,136 @@ func _test_empty_room_auto_cleanup(r) -> void:
 
 	room_manager.remove_peer(1)
 	r.expect_eq("전원이 나가면 방이 정리됨", room_manager.get_room(code), null)
+
+
+## 2-6(§6) - 게임 도중(IN_GAME) 뜻하지 않게 끊기면(voluntary=false) 슬롯을
+## 완전히 안 비우고 재접속 유예로 넘긴다.
+func _test_involuntary_disconnect_in_game_keeps_slot(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+
+	var result := room_manager.remove_peer(2, false, 1000)
+	r.expect_eq("슬롯 인덱스는 그대로 1번", result["slot_index"], 1)
+	r.expect_true("슬롯 자체는 안 비워짐", room.slots[1] != null)
+	r.expect_eq("연결 상태는 GRACE_PERIOD", room.slot_connection_state[1], Room.ConnectionState.GRACE_PERIOD)
+
+
+func _test_involuntary_disconnect_does_not_empty_room(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room.state = Room.State.IN_GAME
+	var code := room.code
+
+	# 방을 만든 사람(슬롯 0) 혼자인 방에서 끊겨도, 슬롯이 안 비워지므로
+	# occupied_count가 그대로라 방이 정리되지 않는다.
+	room_manager.remove_peer(1, false, 1000)
+	r.expect_true("게임 도중 끊기면 방이 안 지워짐", room_manager.get_room(code) != null)
+
+
+## 명시적으로 나가는 것(leave())은 게임 도중이라도 그레이스 없이 즉시
+## 완전히 비운다.
+func _test_voluntary_leave_in_game_fully_vacates(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+
+	room_manager.remove_peer(2, true, 1000)
+	r.expect_eq("슬롯이 완전히 비워짐", room.slots[1], null)
+
+
+func _test_involuntary_disconnect_in_lobby_fully_vacates(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	# room.state는 기본값 LOBBY 그대로.
+
+	room_manager.remove_peer(2, false, 1000)
+	r.expect_eq("로비 중 끊김은 재접속 유예 없이 바로 비워짐", room.slots[1], null)
+
+
+func _test_reconnect_with_valid_token_restores_slot(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+	var token: String = room.slots[1]["reconnect_token"]
+
+	room_manager.remove_peer(2, false, 1000)
+	var result = room_manager.join_room(room.code, 999, token)
+	r.expect_true("올바른 토큰이면 Room을 돌려줌(에러 문자열 아님)", result is Room)
+	r.expect_eq("같은 슬롯(1번)으로 복귀", room.find_slot_by_peer(999), 1)
+	r.expect_eq("연결 상태가 다시 CONNECTED", room.slot_connection_state[1], Room.ConnectionState.CONNECTED)
+
+
+func _test_reconnect_with_wrong_token_is_room_full(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+	room_manager.remove_peer(2, false, 1000)
+
+	var result = room_manager.join_room(room.code, 999, "틀린-토큰")
+	r.expect_eq("틀린 토큰은 ROOM_FULL", result, NetProtocol.ERROR_ROOM_FULL)
+
+
+func _test_reconnect_with_empty_token_is_room_full(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+	room_manager.remove_peer(2, false, 1000)
+
+	var result = room_manager.join_room(room.code, 999)
+	r.expect_eq("토큰 없이는(빈 문자열) ROOM_FULL", result, NetProtocol.ERROR_ROOM_FULL)
+
+
+## 2-6B - REMATCHING 중엔 나갔던 사람이 아니라 완전히 새로운 사람이
+## 빈 슬롯을 채워 들어올 수도 있어야 한다(사람이 모자란 재대전 로비).
+func _test_join_room_during_rematching_allows_fresh_join(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+	room_manager.remove_peer(2, true, 1000)  # 자발적 퇴장 - 슬롯 완전히 비워짐
+	room.state = Room.State.REMATCHING
+
+	var result = room_manager.join_room(room.code, 999)
+	r.expect_true("토큰 없이도 REMATCHING 중엔 새로 참가 가능", result is Room)
+	r.expect_eq("빈 슬롯(1번)에 배정됨", room.find_slot_by_peer(999), 1)
+
+
+## 같은 REMATCHING 상태여도, 토큰이 실제로 일치하면 신규 참가가 아니라
+## 재접속으로 처리돼야 한다(빈 슬롯을 엉뚱한 사람이 먼저 채가면 안 됨).
+func _test_join_room_during_rematching_prefers_token_match(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.IN_GAME
+	var token: String = room.slots[1]["reconnect_token"]
+	room_manager.remove_peer(2, false, 1000)  # 비자발적 - 그레이스 유지
+	room.state = Room.State.REMATCHING
+
+	var result = room_manager.join_room(room.code, 999, token)
+	r.expect_true("토큰이 맞으면 REMATCHING 중에도 재접속으로 처리", result is Room)
+	r.expect_eq("원래 슬롯(1번)으로 복귀", room.find_slot_by_peer(999), 1)
+	r.expect_eq("연결 상태가 다시 CONNECTED", room.slot_connection_state[1], Room.ConnectionState.CONNECTED)
+
+
+## 2-6B(추천안) - 재대전 대기 중 끊긴 사람도 2-6과 같은 원칙(연결이
+## 끊기면 슬롯을 살려 재접속을 기다림)을 그대로 적용받는다.
+func _test_involuntary_disconnect_during_rematching_keeps_slot(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+	room.state = Room.State.REMATCHING
+
+	var result := room_manager.remove_peer(2, false, 1000)
+	r.expect_eq("슬롯 인덱스는 그대로 1번", result["slot_index"], 1)
+	r.expect_true("슬롯 자체는 안 비워짐", room.slots[1] != null)
+	r.expect_eq("연결 상태는 GRACE_PERIOD", room.slot_connection_state[1], Room.ConnectionState.GRACE_PERIOD)
 
 
 ## 방마다 SecureRandom.generate_seed()를 새로 호출해서 시드를 뽑으므로,

@@ -7,7 +7,13 @@ extends RefCounted
 # UI를 모르는 것과 같은 이유로, 헤드리스에서 그대로 테스트할 수 있게 하기
 # 위함이다.
 
-enum State { LOBBY, TRANSFERRING, IN_GAME, ENDED }
+# 2-6B(같은 방에서 재대전) - ENDED는 따로 안 둔다. 예전엔 게임이 끝나면
+# ENDED로 갔지만, 그 값은 아무 데서도 직접 검사되지 않았다(항상 "LOBBY
+# 아님"/"TRANSFERRING 아님" 같은 부정 조건으로만 걸렸음) - "게임이 막
+# 끝남"과 "재대전 투표를 기다림"은 같은 순간이라 구분할 실익이 없어서,
+# 게임이 끝나면 곧장 REMATCHING으로 간다(뒤 accepts_lobby_actions() 참고 -
+# LOBBY와 함께 "캐릭터 선택/준비/인원수 변경을 받아주는 상태"로 취급).
+enum State { LOBBY, TRANSFERRING, IN_GAME, REMATCHING }
 
 # 2-5(캐릭터 팩 전송) - TRANSFERRING 상태 안의 세부 단계. COLLECTING(요청
 # 수집 중) -> TRANSFERRING_PACK(해시 하나를 전송 중) -> ...(큐가 빌 때까지
@@ -31,6 +37,14 @@ enum TransferState { COLLECTING, TRANSFERRING_PACK, AWAITING_READY, DONE }
 
 const RECONNECT_TOKEN_BYTES := 24
 
+# 2-6(연결 끊김/재접속, docs/multiplayer.md §6) - 슬롯 하나의 연결 상태.
+# CONNECTED: 정상. GRACE_PERIOD: 끊겼지만 재접속 유예(2분) 안 - peer_id는
+# -1이지만 meta/reconnect_token은 그대로 남아있어 같은 토큰으로 돌아오면
+# 복귀할 수 있다. PAST_GRACE: 유예가 끝나 "확정 이탈"로 넘어감(그때부터
+# 매턴 즉시 자동 처리) - 그래도 같은 토큰이면 나중에 다시 돌아올 수 있다
+# (2-6 설계 확정 - 유예가 끝난다고 재접속 자체를 영구히 막지는 않는다).
+enum ConnectionState { CONNECTED, GRACE_PERIOD, PAST_GRACE }
+
 var code: String
 var capacity: int
 var state: State = State.LOBBY
@@ -41,7 +55,28 @@ var game_state: GameState
 # {peer_id:int, meta:Dictionary, ready:bool, reconnect_token:String}.
 # 길이는 항상 capacity와 같다 - set_player_count로 늘어나면 뒤에 null을
 # 채우고, 줄어들면 뒤쪽의 빈 자리만 잘라낸다(_resize_slots 참고).
+# LOBBY 중에는 "빈 슬롯"이 그대로 null이지만, TRANSFERRING/IN_GAME 중
+# 연결이 끊긴 슬롯은 null이 되지 않는다(peer_id만 -1) - 재접속으로 같은
+# 자리를 되찾으려면 meta/reconnect_token이 남아있어야 하기 때문이다.
 var slots: Array = []
+
+# 2-6 - slots와 길이가 항상 같이 간다(seat_player()/change_capacity()가
+# 같이 관리). slot_connection_state[i]/slot_disconnect_deadline_msec[i]는
+# slots[i]가 null이면 의미 없다(빈 슬롯이므로).
+var slot_connection_state: Array = []
+var slot_disconnect_deadline_msec: Array = []
+
+# 2-6(§6 "턴 제한 시간") - IN_GAME에서만 의미가 있다. 0이면 지금 활성화된
+# 카운트다운이 없다는 뜻(게임 시작 전이거나, 막 리셋되기 전인 아주 짧은
+# 순간). server_main.gd가 turn_started/요청 처리마다 reset_turn_deadline()
+# 을 부르고, 매 프레임 is_turn_timed_out()으로 확인한다.
+var turn_deadline_msec: int = 0
+
+# 2-6B(같은 방에서 재대전) - REMATCHING일 때만 의미가 있다. 0이면 대기
+# 시간 판정이 이미 끝난 상태(전원 준비됐거나 한 번 만료 처리를 마침) -
+# 그 뒤로는 원래 로비처럼 무기한 대기(사람이 모자라면 새로 들어오길
+# 기다림)로 자연히 넘어간다.
+var rematch_deadline_msec: int = 0
 
 # 2-5(캐릭터 팩 전송) - TRANSFERRING 상태일 때만 의미가 있다. 서버
 # (server_main.gd)의 _service_transferring_rooms()가 이 필드들만 보고
@@ -95,6 +130,10 @@ func _init(room_code: String, player_count: int) -> void:
 	rng.seed = SecureRandom.generate_seed()
 	game_state = GameState.new(player_count, rng)
 	slots.resize(player_count)
+	slot_connection_state.resize(player_count)
+	slot_connection_state.fill(ConnectionState.CONNECTED)
+	slot_disconnect_deadline_msec.resize(player_count)
+	slot_disconnect_deadline_msec.fill(0)
 
 
 ## 현재 채워진 슬롯 중 가장 낮은 인덱스를 방장으로 취급한다(문서에 명시가
@@ -134,19 +173,99 @@ func seat_player(peer_id: int) -> int:
 		if slots[i] == null:
 			var token := Crypto.new().generate_random_bytes(RECONNECT_TOKEN_BYTES).hex_encode()
 			slots[i] = {"peer_id": peer_id, "meta": {}, "ready": false, "reconnect_token": token}
+			slot_connection_state[i] = ConnectionState.CONNECTED
+			slot_disconnect_deadline_msec[i] = 0
 			return i
 	return -1
 
 
-## 로비 중 leave/연결 끊김 - 그 슬롯을 완전히 비워서 다음 join_room이 채울
-## 수 있게 한다(§3). 게임이 시작된 뒤(§6, 슬롯 유지+AFK)의 정교한 처리는
-## 2-6 범위다 - 지금은 크래시만 안 나게 슬롯을 비우는 정도로 단순 처리한다.
+## 로비/게임 종료 중 leave·연결 끊김, 또는 게임 도중이라도 명시적으로
+## "나가기"를 누른 경우(§3, §6) - 그 슬롯을 완전히 비워서 다음 join_room이
+## 채울 수 있게 한다. 게임 도중 "끊김"(자기 뜻이 아닌 연결 끊김)은 이
+## 함수를 쓰지 않는다 - mark_slot_disconnected()가 대신 슬롯을 살려둔다.
 func vacate_by_peer(peer_id: int) -> int:
 	for i in slots.size():
 		if slots[i] != null and slots[i]["peer_id"] == peer_id:
-			slots[i] = null
+			vacate_slot(i)
 			return i
 	return -1
+
+
+## 2-6B - 슬롯 인덱스로 직접 비운다(`vacate_by_peer()`와 달리 살아있는
+## peer_id가 필요 없다) - 재대전 대기 시간이 만료돼 "버튼을 안 눌렀거나
+## 끊긴 채 안 돌아온" 슬롯을 내보낼 때 쓴다. 그 슬롯은 이미 `peer_id`가
+## -1(연결 끊김)이었을 수도 있어서 `vacate_by_peer()`로는 못 찾는다.
+func vacate_slot(slot_index: int) -> void:
+	if slot_index < 0 or slot_index >= slots.size():
+		return
+	slots[slot_index] = null
+	slot_connection_state[slot_index] = ConnectionState.CONNECTED
+	slot_disconnect_deadline_msec[slot_index] = 0
+
+
+## 2-6 - 게임 도중(TRANSFERRING/IN_GAME) 연결이 끊겼을 때 슬롯을 비우지
+## 않고 살려둔다. peer_id만 -1로 만들어 "지금 이 자리에 살아있는 연결이
+## 없다"는 걸 표시하고, meta/reconnect_token은 그대로 둔다 - 같은 토큰으로
+## 오면 find_slot_by_reconnect_token()이 이 슬롯을 찾아 복귀시킬 수 있게.
+func mark_slot_disconnected(slot_index: int, now_msec: int) -> void:
+	if slot_index < 0 or slot_index >= slots.size() or slots[slot_index] == null:
+		return
+	slots[slot_index]["peer_id"] = -1
+	slot_connection_state[slot_index] = ConnectionState.GRACE_PERIOD
+	slot_disconnect_deadline_msec[slot_index] = now_msec + NetProtocol.RECONNECT_GRACE_MSEC
+
+
+## 2-6 - 같은 토큰으로 돌아온 접속을 그 슬롯에 다시 연결한다.
+func mark_slot_reconnected(slot_index: int, new_peer_id: int) -> void:
+	if slot_index < 0 or slot_index >= slots.size() or slots[slot_index] == null:
+		return
+	slots[slot_index]["peer_id"] = new_peer_id
+	slot_connection_state[slot_index] = ConnectionState.CONNECTED
+	slot_disconnect_deadline_msec[slot_index] = 0
+
+
+## 2-6 - 재접속 유예가 끝났거나(서비스 루프가 부름) 명시적으로 나가서
+## (leave(), 그레이스 없이 즉시) "확정 이탈"로 넘어간다. 슬롯 자체는 안
+## 지운다 - 나중에 같은 토큰으로 다시 올 수 있다(설계 확정).
+func mark_slot_departed(slot_index: int) -> void:
+	if slot_index < 0 or slot_index >= slots.size() or slots[slot_index] == null:
+		return
+	slot_connection_state[slot_index] = ConnectionState.PAST_GRACE
+	slot_disconnect_deadline_msec[slot_index] = 0
+
+
+func is_grace_expired(slot_index: int, now_msec: int) -> bool:
+	if slot_index < 0 or slot_index >= slots.size():
+		return false
+	return slot_connection_state[slot_index] == ConnectionState.GRACE_PERIOD and now_msec >= slot_disconnect_deadline_msec[slot_index]
+
+
+## 2-6 - 토큰이 일치하고 지금 연결돼 있지 않은(CONNECTED가 아닌) 슬롯을
+## 찾는다. 이미 연결된 슬롯은 매칭 대상에서 제외한다 - 살아있는 자리를
+## 같은 토큰(발급 당시 값이 유출됐다 해도)으로 가로챌 수 없게 하기 위함.
+func find_slot_by_reconnect_token(token: String) -> int:
+	if token.is_empty():
+		return -1
+	for i in slots.size():
+		if slots[i] == null:
+			continue
+		if slot_connection_state[i] == ConnectionState.CONNECTED:
+			continue
+		if slots[i]["reconnect_token"] == token:
+			return i
+	return -1
+
+
+func reset_turn_deadline(now_msec: int) -> void:
+	turn_deadline_msec = now_msec + NetProtocol.TURN_TIMEOUT_MSEC
+
+
+func is_turn_timed_out(now_msec: int) -> bool:
+	return turn_deadline_msec > 0 and now_msec >= turn_deadline_msec
+
+
+func clear_turn_deadline() -> void:
+	turn_deadline_msec = 0
 
 
 func find_slot_by_peer(peer_id: int) -> int:
@@ -165,6 +284,14 @@ func all_ready() -> bool:
 	return true
 
 
+## 2-6B - "캐릭터 선택/준비/인원수 변경/신규 참가를 받아주는 상태"인지.
+## LOBBY(첫 게임 전)와 REMATCHING(게임이 끝나고 다음 판을 기다리는 중)
+## 둘 다 여기 해당한다 - 서버의 모든 로비류 메시지 핸들러와
+## RoomManager.join_room()이 이 하나만 확인한다.
+func accepts_lobby_actions() -> bool:
+	return state == State.LOBBY or state == State.REMATCHING
+
+
 ## 방장이 로비에서 인원수를 바꿀 때 부른다(set_player_count). 이미 들어온
 ## 인원보다 낮게는 호출부가 미리 막아야 한다(여기서는 방어적으로만 재확인).
 ## GameState._init()은 생성 시점에 주사위를 굴리지 않으므로(roll()을 실제로
@@ -176,12 +303,49 @@ func change_capacity(new_capacity: int) -> bool:
 
 	if new_capacity > slots.size():
 		slots.resize(new_capacity)
+		var old_size := slot_connection_state.size()
+		slot_connection_state.resize(new_capacity)
+		slot_disconnect_deadline_msec.resize(new_capacity)
+		for i in range(old_size, new_capacity):
+			slot_connection_state[i] = ConnectionState.CONNECTED
+			slot_disconnect_deadline_msec[i] = 0
 	elif new_capacity < slots.size():
 		slots = slots.slice(0, new_capacity)
+		slot_connection_state = slot_connection_state.slice(0, new_capacity)
+		slot_disconnect_deadline_msec = slot_disconnect_deadline_msec.slice(0, new_capacity)
 
 	capacity = new_capacity
 	game_state = GameState.new(new_capacity, rng)
 	return true
+
+
+## 2-6B(같은 방에서 재대전) - 게임이 끝나는 순간 부른다. 전원 다시
+## 준비해야 하므로 ready를 전부 되돌리고("한 판 더"를 누른 사람만 다시
+## true가 됨), 대기 상한을 잡는다. slot_connection_state는 안 건드린다 -
+## 이 시점엔 다들 CONNECTED이거나(정상 종료) 이미 GRACE_PERIOD로 표시된
+## 상태(게임 도중 끊긴 채 게임이 끝난 경우)일 뿐이라 그대로 유지한다.
+func begin_rematch_wait(now_msec: int) -> void:
+	state = State.REMATCHING
+	for slot in slots:
+		if slot != null:
+			slot["ready"] = false
+	rematch_deadline_msec = now_msec + NetProtocol.REMATCH_READY_TIMEOUT_MSEC
+
+
+func is_rematch_wait_timed_out(now_msec: int) -> bool:
+	return state == State.REMATCHING and rematch_deadline_msec > 0 and now_msec >= rematch_deadline_msec
+
+
+func clear_rematch_deadline() -> void:
+	rematch_deadline_msec = 0
+
+
+## 2-6B - 처음 게임이든 재대전이든 항상 이 경로로 새 GameState를 만든다
+## (예외 없이 통일 - "지난 판 상태가 조금이라도 남으면 안 된다"는 요구를
+## 분기 없이 만족한다). change_capacity()와 같은 이유로 같은 rng 인스턴스를
+## 재사용한다 - 시드를 방마다 한 번만 뽑는다는 원칙이 깨지지 않는다.
+func start_new_game() -> void:
+	game_state = GameState.new(capacity, rng)
 
 
 ## 턴 기반 요청(request_roll/hold/score) 검증 - docs/multiplayer.md §4.

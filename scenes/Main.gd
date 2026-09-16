@@ -36,6 +36,12 @@ var my_player_index: int = -1
 # 전혀 안 바뀐다. 분기는 이 플래그를 보는 두 핸들러 안에서만 일어난다.
 var _character_select_for_online: bool = false
 
+# 2-6B(같은 방에서 재대전) - _character_select_for_online이 true인 두
+# 경우(로비 사전 선택 vs 게임 종료 후 [한 판 더]) 중 후자를 표시한다.
+# 이게 true면 확정 시점에 online_screen.confirm_rematch_character()로
+# 보내서 select_character+ready(true)까지 자동으로 나가게 한다.
+var _character_select_for_rematch: bool = false
+
 var locked_style := StyleBoxFlat.new()
 var column_normal_style := StyleBoxFlat.new()
 var column_highlight_style := StyleBoxFlat.new()
@@ -56,6 +62,21 @@ var bonus_labels: Array[Label] = []
 var total_labels: Array[Label] = []
 var player_columns: Array[PanelContainer] = []
 var small_tag_rows: Array[Control] = []
+# connection_status_labels[p] - 그 플레이어 칸 밑에 붙는 연결 상태 문구
+# (2-6, docs/multiplayer.md §6). 로컬 게임에서는 관련 신호가 전혀 안 와서
+# 항상 빈 채로 숨겨져 있다 - 온라인 전용 표시다.
+var connection_status_labels: Array[Label] = []
+# player_index -> true, "확정 이탈"(reason="timeout")로 통보받은 슬롯.
+# 하나라도 있으면 [로비로 나가기] 버튼을 보여준다(2-6).
+var _departed_player_indices: Dictionary = {}
+# 2-6 - 온라인 게임 중인 GameClient. player_left/player_reconnected/
+# player_timer를 직접 구독하기 위해 들고 있는다(online_screen이 이미
+# _client를 갖고 있지만, 게임 화면에서 벌어지는 일이라 Main.gd가 직접
+# 구독하는 게 자연스럽다).
+var _online_client: GameClient = null
+# 2-6 - 시작 시 SessionStore에서 읽은 세션. 다이얼로그에서 "예"를 누르면
+# 이걸 그대로 online_screen.attempt_session_resume()에 넘긴다.
+var _pending_saved_session: Dictionary = {}
 
 # player_character_assignments[player] -> CharacterProfile.
 var player_character_assignments: Array[CharacterProfile] = []
@@ -88,6 +109,8 @@ var _greeting_active: bool = false
 @onready var online_screen = $OnlineScreen
 
 @onready var turn_label: Label = $GameScreen/Margin/MainHBox/RightColumn/TurnLabel
+@onready var turn_countdown_label: Label = $GameScreen/Margin/MainHBox/RightColumn/TurnCountdownLabel
+@onready var leave_to_lobby_button: Button = $GameScreen/Margin/MainHBox/RightColumn/LeaveToLobbyButton
 @onready var big_portrait_area: PanelContainer = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea
 @onready var portrait_stack: Control = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack
 @onready var portrait_texture_a: TextureRect = $GameScreen/Margin/MainHBox/LeftColumn/BigPortraitArea/PortraitStack/PortraitTextureA
@@ -115,9 +138,16 @@ var _greeting_active: bool = false
 @onready var game_over_panel: PanelContainer = $GameOverOverlay/CenterContainer/Panel
 @onready var game_over_label: Label = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverLabel
 @onready var restart_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/RestartButton
+@onready var rematch_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/RematchButton
 @onready var to_title_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/ToTitleButton
 
 @onready var quit_confirm_dialog: ConfirmationDialog = $QuitConfirmDialog
+
+# 2-6(연결 끊김/재접속/턴 타임아웃, docs/multiplayer.md §6).
+@onready var reconnect_overlay: Control = $ReconnectOverlay
+@onready var reconnect_status_label: Label = $ReconnectOverlay/Banner/HBox/StatusLabel
+@onready var reconnect_overlay_leave_button: Button = $ReconnectOverlay/Banner/HBox/OverlayLeaveButton
+@onready var session_resume_dialog: ConfirmationDialog = $SessionResumeDialog
 
 @onready var debug_hotkeys = $DebugHotkeys
 
@@ -215,15 +245,28 @@ func _ready() -> void:
 	online_screen.game_play_started.connect(_on_online_game_play_started)
 	online_screen.character_select_requested.connect(_on_online_character_select_requested)
 
+	# 2-6(§6) - 온라인 화면이 통제하는 접속 재시도 상태를 게임 화면 위
+	# 배너로 보여준다(화면 전환은 안 함 - 로비로 안 튕기는 게 핵심).
+	online_screen.connection_status_changed.connect(_on_connection_status_changed)
+	online_screen.game_reconnected.connect(_on_game_reconnected)
+	online_screen.reconnect_exhausted.connect(_on_reconnect_exhausted)
+	leave_to_lobby_button.pressed.connect(_return_to_title)
+	reconnect_overlay_leave_button.pressed.connect(_return_to_title)
+
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
 	restart_button.pressed.connect(_on_restart_pressed)
+	rematch_button.pressed.connect(_on_rematch_button_pressed)
 	to_title_button.pressed.connect(_on_to_title_pressed)
 	quit_confirm_dialog.confirmed.connect(_return_to_title)
 
 	# GameEvents는 앱이 사는 동안 계속 살아있는 autoload라서, game_state처럼
 	# 게임을 새로 시작할 때마다가 아니라 여기서 딱 한 번만 연결한다.
 	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
+	# 2-6(§6) - 새 턴이 시작되면 이전 턴의 카운트다운 문구는 의미가 없다.
+	# 로컬 게임에서는 이 라벨이 애초에 한 번도 안 보이므로(player_timer가
+	# 안 오니까) 매턴 숨기는 게 항상 안전하다.
+	GameEvents.turn_started.connect(func(_p): turn_countdown_label.visible = false)
 
 	# VoiceBank도 마찬가지로 앱 생애주기 내내 사는 autoload다 - 인사 연출
 	# 시퀀스 시그널도 여기서 한 번만 연결한다.
@@ -239,11 +282,14 @@ func _ready() -> void:
 
 	debug_init_log.visible = BuildInfo.DEBUG_MODE
 
-	# 온라인 재접속 UI는 아직 없다(2-6에서 구현) - 지금은 이전 세션이
-	# 저장되어 있었는지 콘솔에만 알린다(docs/multiplayer.md §6).
+	# 2-6(§6) - 저장된 세션이 있으면 "돌아가시겠어요?"를 묻는다. 거절해도
+	# 세션 파일은 그대로 둔다(§6에 "거절 시 삭제" 조건이 없음 - 다음에
+	# 다시 물어볼 수 있게).
+	session_resume_dialog.confirmed.connect(_on_session_resume_confirmed)
 	var saved_session = SessionStore.load()
 	if saved_session != null:
-		print("이전 세션 발견: 방 %s (복귀 UI는 아직 없습니다)" % saved_session.get("code", "?"))
+		_pending_saved_session = saved_session
+		session_resume_dialog.popup_centered()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -344,6 +390,16 @@ func _on_character_select_back() -> void:
 		_show_screen(Screen.START)
 
 
+## 2-6(§6) - 시작 화면 다이얼로그에서 "예"를 눌렀을 때. 온라인 화면으로
+## 전환하고 복귀 시도를 맡긴다 - 실패(방이 이미 정리됨 등)해도 조용히
+## 평소 시작 화면으로 남는다(online_screen.attempt_session_resume() 참고).
+func _on_session_resume_confirmed() -> void:
+	var saved := _pending_saved_session
+	_pending_saved_session = {}
+	_show_screen(Screen.ONLINE)
+	online_screen.attempt_session_resume(saved)
+
+
 ## [로컬 게임]/[온라인 게임] 중 하나를 고르기 전의 기본 상태로 되돌린다 -
 ## 온라인 화면에서 뒤로 나올 때처럼 "완전히 다른 모드에서 돌아온" 경우에만
 ## 쓴다. 로컬 인원수 화면(캐릭터 선택 등)에서 뒤로 오는 경로는 이 함수를
@@ -381,10 +437,23 @@ func _on_online_character_select_requested() -> void:
 	_show_screen(Screen.CHARACTER_SELECT)
 
 
+## 2-6B(같은 방에서 재대전) - 게임 종료 화면의 [한 판 더]. 로비의 [캐릭터
+## 선택]과 완전히 같은 화면 흐름을 타되(2-4B 재사용, 새 로직 없음),
+## 확정 시점에 "이미 방 안이니 바로 전송+준비까지 자동으로 보낸다"만
+## 다르다 - 그 구분을 _character_select_for_rematch로 표시해둔다.
+func _on_rematch_button_pressed() -> void:
+	_character_select_for_rematch = true
+	_on_online_character_select_requested()
+
+
 func _on_character_selection_confirmed(profiles: Array[CharacterProfile]) -> void:
 	if _character_select_for_online:
 		_character_select_for_online = false
-		online_screen.set_my_profile(profiles[0])
+		if _character_select_for_rematch:
+			_character_select_for_rematch = false
+			online_screen.confirm_rematch_character(profiles[0])
+		else:
+			online_screen.set_my_profile(profiles[0])
 		_show_screen(Screen.ONLINE)
 	else:
 		_start_new_game(profiles)
@@ -423,6 +492,15 @@ func _return_to_title() -> void:
 		active_controller.leave_game()
 	active_controller = null
 	my_player_index = -1
+
+	# 2-6(§6) - 스스로 나가는 것이므로 재접속 세션을 끝낸다(끝난 게임에
+	# 돌아가겠냐고 다음에 또 물어보지 않게). 이 함수는 로컬 게임 종료에도
+	# 쓰이므로 깨끗한(비어있는) SessionStore.clear() 자체는 항상 안전하다.
+	SessionStore.clear()
+	_disconnect_online_client_signals()
+	reconnect_overlay.visible = false
+	leave_to_lobby_button.visible = false
+	_departed_player_indices.clear()
 
 	_clear_dynamic_nodes()
 	_reset_portrait_transition_state()
@@ -469,9 +547,94 @@ func _start_new_game(profiles: Array[CharacterProfile]) -> void:
 ## online_screen이 서버의 game_started를 받아 로비를 끝내면 이걸 부른다
 ## (online_screen.gd의 game_play_started 시그널). profiles는 닉네임만 채운
 ## 빈 CharacterProfile 배열이다(2-3이 정한 v1 온라인 범위, 문서 §8).
+## 2-6B(같은 방에서 재대전) - 재대전이 성공하면 같은 GameClient로 이
+## 함수가 또 불린다(로비 종료 game_started가 다시 옴). 매번 새로
+## connect()하면 두 번째 판부터 신호가 중복 연결되므로, 먼저 이전 구독을
+## 확실히 끊고 다시 건다(_disconnect_online_client_signals()는 이미 2-6에서
+## idempotent하게 만들어둔 헬퍼 - 그대로 재사용).
 func _on_online_game_play_started(client: GameClient, my_index: int, profiles: Array[CharacterProfile]) -> void:
+	_disconnect_online_client_signals()
+	_online_client = client
+	_online_client.player_left.connect(_on_online_player_left)
+	_online_client.player_reconnected.connect(_on_online_player_reconnected)
+	_online_client.player_timer.connect(_on_online_player_timer)
+
 	var controller := OnlineGameController.new(client, profiles.size(), my_index)
 	_enter_game(controller, profiles, my_index)
+
+
+## 2-6(§6) - 다음 온라인 세션을 시작하기 전에(또는 로컬/타이틀로 돌아갈 때)
+## 이전 세션의 구독을 확실히 끊는다 - 안 그러면 온라인 게임을 여러 번
+## 오갈 때 콜백이 중복 호출된다.
+func _disconnect_online_client_signals() -> void:
+	if _online_client == null:
+		return
+	if _online_client.player_left.is_connected(_on_online_player_left):
+		_online_client.player_left.disconnect(_on_online_player_left)
+	if _online_client.player_reconnected.is_connected(_on_online_player_reconnected):
+		_online_client.player_reconnected.disconnect(_on_online_player_reconnected)
+	if _online_client.player_timer.is_connected(_on_online_player_timer):
+		_online_client.player_timer.disconnect(_on_online_player_timer)
+	_online_client = null
+
+
+## 2-6(§6 "화면 표시") - 다른 플레이어의 연결 상태를 그 사람 칸 밑에
+## 지속적으로 표시한다("한 번 뜨고 사라지는 토스트가 아니라 계속 붙어
+## 있는 형태"). reason="disconnected"는 재접속 유예 중(약하게 표시),
+## "timeout"은 확정 이탈(자동 진행 중이라고 계속 표시 + [로비로 나가기]
+## 노출).
+func _on_online_player_left(player_index: int, reason: String) -> void:
+	if player_index < 0 or player_index >= connection_status_labels.size():
+		return
+	var label := connection_status_labels[player_index]
+	if reason == "timeout":
+		label.text = "나갔습니다 (자동 진행 중)"
+		label.visible = true
+		_departed_player_indices[player_index] = true
+		leave_to_lobby_button.visible = true
+	elif reason == "disconnected":
+		label.text = "연결 끊김 - 재접속 대기 중"
+		label.visible = true
+
+
+func _on_online_player_reconnected(player_index: int) -> void:
+	if player_index < 0 or player_index >= connection_status_labels.size():
+		return
+	connection_status_labels[player_index].visible = false
+	_departed_player_indices.erase(player_index)
+	leave_to_lobby_button.visible = not _departed_player_indices.is_empty()
+
+
+## 2-6(§6, 새 요구사항) - 턴 제한/재접속 유예 카운트다운을 같은 메시지로
+## 받는다(NetProtocol.MSG_PLAYER_TIMER). "turn"은 화면 상단 턴 라벨
+## 옆으로, "reconnect"는 그 플레이어 칸 밑 문구에 남은 시간을 이어 붙인다.
+func _on_online_player_timer(player_index: int, kind: String, seconds_left: int) -> void:
+	if kind == "turn":
+		turn_countdown_label.text = "(응답 없으면 %d초 후 자동 진행)" % seconds_left
+		turn_countdown_label.visible = true
+	elif kind == "reconnect" and player_index >= 0 and player_index < connection_status_labels.size():
+		connection_status_labels[player_index].text = "연결 끊김 - 재접속 대기 중 (%d초)" % seconds_left
+		connection_status_labels[player_index].visible = true
+
+
+## 2-6(§6) - online_screen이 재접속을 시도/포기/성공할 때마다 배너를
+## 갱신한다. 화면 전환은 절대 안 한다(_show_screen()을 안 부름) - 로비로
+## 튕기지 않는 게 핵심 요구사항이다.
+func _on_connection_status_changed() -> void:
+	var text: String = online_screen.get_connection_status_text()
+	reconnect_status_label.text = text
+	reconnect_overlay.visible = text != ""
+	reconnect_overlay_leave_button.visible = false
+
+
+func _on_game_reconnected() -> void:
+	reconnect_overlay.visible = false
+
+
+func _on_reconnect_exhausted() -> void:
+	reconnect_status_label.text = "재접속에 실패했습니다."
+	reconnect_overlay.visible = true
+	reconnect_overlay_leave_button.visible = true
 
 
 ## 로컬/온라인 공용 게임 진입 로직("리모컨"이 어느 컨트롤러에 꽂히는지
@@ -539,7 +702,11 @@ func _clear_dynamic_nodes() -> void:
 	total_labels.clear()
 	player_columns.clear()
 	small_tag_rows.clear()
+	connection_status_labels.clear()
 	player_character_assignments.clear()
+	_departed_player_indices.clear()
+	leave_to_lobby_button.visible = false
+	turn_countdown_label.visible = false
 
 
 ## 내 턴인지 확인한다(로컬은 항상 true - 전원이 한 화면을 같이 쓰므로
@@ -773,6 +940,17 @@ func _build_scoreboard() -> void:
 
 		vbox.add_child(_make_row_label("플레이어 %d" % (p + 1), HORIZONTAL_ALIGNMENT_CENTER))
 
+		# 2-6(§6 "화면 표시") - 연결 상태 문구. 로컬 게임/평소 온라인
+		# 게임에서는 관련 신호가 안 오므로 계속 숨겨진 채로 남는다.
+		var connection_label := Label.new()
+		connection_label.visible = false
+		connection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		connection_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		connection_label.add_theme_font_size_override("font_size", 11)
+		connection_label.add_theme_color_override("font_color", Color(1, 0.7, 0.4, 1))
+		vbox.add_child(connection_label)
+		connection_status_labels.append(connection_label)
+
 		var player_score_labels: Array[Label] = []
 		var player_preview_buttons: Array[Button] = []
 
@@ -942,9 +1120,11 @@ func _refresh_game_over_ui() -> void:
 	game_over_label.text = "게임 종료!\n%s\n%s" % [result_text, _build_score_summary_text()]
 	game_over_overlay.visible = true
 
-	# 온라인 재대전(같은 방에서 다시 시작) 흐름은 이번 범위 밖이다 - 로컬
-	# 전용 "다시 하기"만 남기고, 온라인은 "타이틀로"만 제공한다.
+	# 로컬은 "다시 하기"(바로 새 판), 온라인은 2-6B의 "한 판 더"(같은
+	# 방에서 재대전 - 전원이 눌러야 시작됨)를 쓴다. "타이틀로"/"나가기"는
+	# 항상 둘 다에서 보인다.
 	restart_button.visible = (my_player_index == -1)
+	rematch_button.visible = (my_player_index != -1)
 
 
 func _build_score_summary_text() -> String:

@@ -76,6 +76,30 @@ const CLIENT_INBOUND_BUFFER_BYTES := 1024 * 1024
 # 총량이 늘어나므로 클라이언트와 같은 값으로 미리 넉넉하게 잡아둔다.
 const SERVER_INBOUND_BUFFER_BYTES := 1024 * 1024
 
+# 2-6(연결 끊김/재접속/턴 타임아웃, docs/multiplayer.md §6) - 자기 턴에
+# 계속 아무 요청도 안 보내면(연결 여부와 무관하게) 서버가 대신 한 수 두는
+# 시간 한도. 클라이언트도 카운트다운 표시에 같은 값을 써야 해서 공유한다.
+const TURN_TIMEOUT_MSEC := 60000
+
+# 2-6(§6) - 연결이 끊긴 뒤 같은 토큰으로 돌아올 수 있는 유예 시간. 이 안에
+# 안 돌아오면 "확정 이탈"로 넘어가 그때부터는 매턴 즉시 자동 처리된다
+# (넘어간 뒤에도 재접속 자체는 계속 허용함 - 사용자 확인).
+const RECONNECT_GRACE_MSEC := 120000
+
+# 2-6B(같은 방에서 재대전, docs/multiplayer.md §3/§6) - 게임이 끝나고
+# REMATCHING으로 들어가면, 버튼을 안 눌렀거나(연결은 멀쩡함) 연결이 끊긴
+# 채 안 돌아온 사람을 얼마나 기다려줄지. RECONNECT_GRACE_MSEC과 같은 값
+# (2분)으로 통일해서 "끊긴 사람을 얼마나 기다리는가"에 대한 기준을 하나로
+# 유지한다 - 재대전 대기 중 끊긴 경우도 이 값 하나로 처리하고, 2-6의
+# 슬롯별 그레이스 타이머를 또 만들지 않는다(Room.begin_rematch_wait() 참고).
+const REMATCH_READY_TIMEOUT_MSEC := 120000
+
+# 2-6 - 첫 접속(배포 환경이 무료 플랜이라 유휴 시 서버가 잠들고 깨어나는 데
+# 최대 1분 걸림)과 게임 도중 재접속 양쪽에 공용으로 쓰는 재시도 상한
+# (ReconnectBackoff). 상수 하나로 묶어서 "재시도 로직을 따로 안 만든다"는
+# 원칙을 지킨다.
+const MAX_RECONNECT_ATTEMPTS := 5
+
 
 ## 청크 하나가 실제로 얼마나 큰 메시지가 되는지 대략 추정한다(Base64 인코딩
 ## ceil(n/3)*4 + JSON 봉투 오버헤드 어림값 200바이트) - CLIENT_INBOUND_BUFFER_BYTES
@@ -117,6 +141,12 @@ const MSG_PACK_READY := "pack_ready"
 # 보내달라는 요청. 서버는 이 요청을 방 전체에 방송하지 않고 그 해시의
 # 소유자에게만 전달한다(MSG_PACK_CHUNKS_REQUESTED, 아래).
 const MSG_REQUEST_PACK_CHUNKS := "request_pack_chunks"
+
+# 2-6(§6) - 서버의 ping에 대한 응답. 별도 페이로드 없음 - 서버는 이 메시지
+# 자체가 아니라 "어떤 메시지든 왔다"는 사실로 마지막 통신 시각을 갱신하므로
+# (조용히 유휴 상태인 정상 접속을 pong 하나로만 판단하지 않기 위함), pong은
+# "나 아직 응답할 수 있다"는 확인일 뿐 별도 처리 로직이 없다.
+const MSG_PONG := "pong"
 
 # 서버 -> 클라이언트
 const MSG_HELLO_ACK := "hello_ack"
@@ -166,6 +196,24 @@ const MSG_PACK_TRANSFER_FAILED := "pack_transfer_failed"
 # 전달하는 메시지(위 MSG_PACK_UPLOAD_REQUESTED 등과 달리 방 전체 방송이
 # 아니다 - 소유자 본인 외에는 이 정보로 할 일이 없다).
 const MSG_PACK_CHUNKS_REQUESTED := "pack_chunks_requested"
+
+# 2-6(§6) - 끊김 감지용 애플리케이션 레벨 ping. 방 전체가 아니라 접속
+# 하나하나에 보내므로 방송이 아니다(server_main.gd가 각 peer에게 개별
+# 전송). 페이로드 없음.
+const MSG_PING := "ping"
+
+# 2-6(§6) - "재접속 유예 중이던 플레이어가 돌아왔을 때 전원에게"(문서에
+# 이미 이름이 정의돼 있었음, 이번에 실제로 구현).
+const MSG_PLAYER_RECONNECTED := "player_reconnected"
+
+# 2-6 - 턴 제한/재접속 유예 카운트다운을 화면에 보여주기 위한 신규 메시지
+# (문서 §6에는 없던 요구사항 - 이번에 추가). kind는 "turn"(그 슬롯이 지금
+# 턴 제한 카운트다운 중), "reconnect"(그 슬롯이 재접속 유예 카운트다운
+# 중), "rematch"(2-6B - 게임 종료 후 재대전 대기 카운트다운, player_index는
+# 아직 준비 안 한 슬롯) 셋 중 하나. 초 단위 정수만 담는 작은 메시지라
+# 방 전체에 1초 주기로 방송해도 부담이 없다(2-5 후속 §8.5-6에서 확인한
+# 메시지 크기 기준).
+const MSG_PLAYER_TIMER := "player_timer"
 
 # 문서(§2.0/§4/§7)에 이름이 있는 에러 코드.
 const ERROR_PROTOCOL_MISMATCH := "PROTOCOL_MISMATCH"
