@@ -20,8 +20,19 @@ func _get_name() -> String:
 	return "BuildStamp"
 
 
-func _export_begin(_features: PackedStringArray, _is_debug: bool, _path: String, _flags: int) -> void:
+func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, _flags: int) -> void:
 	var timestamp: String = Time.get_datetime_string_from_system(false, true).substr(0, 16)
+
+	# 베타 배포 후(사용자 요청) - DEBUG_MODE가 이제 build_info.gd의 상수가
+	# 아니라 export 프리셋의 Custom Features 태그("yd_release")로 결정되므로
+	# (build_info.gd 주석 참고), 사람이 export 버튼을 누르는 그 순간에
+	# "이번 빌드가 개발용/배포용 중 뭔지" 콘솔에 바로 보여준다 - 실행 결과를
+	# 기다리지 않고 export 시점에 바로 확인할 수 있게(런타임 확인은 게임
+	# 시작 시 빌드 배너의 "디버그 켜짐/꺼짐" 표시가 따로 해준다).
+	if features.has("yd_release"):
+		print("BuildStamp: 배포용 빌드(yd_release 태그 있음) - DEBUG_MODE 꺼짐")
+	else:
+		print("BuildStamp: 개발용 빌드(yd_release 태그 없음) - DEBUG_MODE 켜짐")
 
 	var file := FileAccess.open(BUILD_INFO_PATH, FileAccess.READ)
 	if file == null:

@@ -959,13 +959,37 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 ### 현재 전체 테스트 개수
 844개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
-### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
-`DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은
-1-7·1-8에서 웹 export 빌드를 계속 확인해야 해서 의도적으로 `true`로 켜져
-있다. 정식 배포 전에는 반드시 `false`로 되돌릴 것** — 이 값은
-`addons/build_stamp`가 건드리지 않는 상수라(정규식이 `BUILD_TIME` 줄만
-바꾼다) export를 다시 해도 그대로 남는다. `git status`/`git diff`로 이 값이
-`false`인지 커밋 전에 항상 확인한다. 3-3(배포 준비) 체크리스트에도 있다.
+### 베타 배포 준비 - DEBUG_MODE를 export 프리셋으로 자동 전환
+베타 배포를 앞두고 사용자가 지적: `DEBUG_MODE` 상수를 손으로 껐다 켰다
+하는 방식은 "다시 켜는 걸 잊거나 켠 채로 내보내는 사고"가 나기 쉽고,
+이 프로젝트는 실제로 사람이 기억하는 방식에 여러 번 실패했다(체크리스트에
+적어두는 것만으로는 부족했다). 두 가지를 정리했다.
+
+- **서버 콘솔 로그는 DEBUG_MODE와 무관한지 먼저 확인** - `server_main.gd`의
+  `print()`를 전수 조사한 결과 처음부터(2-1) 거의 전부 무조건 출력이었다.
+  예외는 딱 3곳, 이번 세션(3번째 재대전 버그 조사) 때 실수로
+  `BuildInfo.DEBUG_MODE`에 묶어 넣은 진단 로그들뿐이었다 - 정작 베타 중에
+  가장 필요할 로그가 배포하면서 꺼지는 셈이었다. 셋 다 무조건 출력으로
+  되돌렸다.
+- **export 프리셋을 `Web (개발)`/`Web (배포)` 둘로 분리**
+  (`export_presets.cfg`) - 후자에만 `custom_features="yd_release"` 태그를
+  달았다. `build_info.gd`의 `DEBUG_MODE`를 `const := true`에서
+  `static var DEBUG_MODE: bool = not OS.has_feature("yd_release")`로
+  바꿔서, 상수를 손으로 안 고쳐도 어느 프리셋으로 export했는지가 자동으로
+  값을 정한다. **Custom Features 태그가 실제 export에서만 바이너리에
+  구워지고 에디터의 "실행"에는 절대 안 붙는다는 것을 임시 Windows
+  프리셋으로 직접 실행해서 확인했다**(에디터 직접 실행은 항상 `false`,
+  export한 바이너리만 `true`) - 그래서 "에디터에서는 항상 켜져 있어야
+  한다"는 요구사항이 코드를 안 갈라도 저절로 만족된다. 자세한 검증
+  방법/export 시점(`addons/build_stamp` 확장)·런타임(빌드 배너에 "디버그
+  켜짐/꺼짐" 표시) 확인 방법은 `docs/web_export.md`("DEBUG_MODE 자동
+  전환")와 `docs/deployment_checklist.md`(전면 개정)에 정리했다.
+- 전체 844개 테스트 그대로 통과(로직 변경 없음 - 컴파일 타임 상수를
+  런타임 계산 값으로 바꾼 것뿐).
+
+### (구) 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
+**위 항목으로 대체됨 - 더 이상 이 상수를 손으로 고치지 않는다.** 아래는
+DEBUG_MODE가 묶고 있던 것들의 목록이라 여전히 유효하므로 남겨둔다.
 
 이 스위치 하나에 아래 세 가지가 전부 묶여 있다(`false`면 셋 다 안 보이고
 안 켜짐, `true`면 셋 다 켜짐):

@@ -1,22 +1,34 @@
 # 배포 준비 체크리스트 (3-3)
 
-정식으로 배포할 빌드를 만들기 직전에 이 목록을 확인한다. 개발 중에는 웹
-export 빌드를 계속 확인해야 해서 디버그 기능을 켜둔 채로 지내는 게 정상이고,
-그래서 실수로 켠 채 배포하는 사고가 나기 쉽다 — 이 문서는 그걸 막기 위한
-마지막 관문이다.
+정식으로(또는 베타로) 배포할 빌드를 만들기 직전에 이 목록을 확인한다.
 
-## 1. `DEBUG_MODE`가 `false`인지 확인
+**베타 배포 후 바뀐 것(사용자 지적)**: 예전엔 `build_info.gd`의
+`DEBUG_MODE` 상수를 손으로 `true`/`false`로 고쳐서 배포했는데, "다시
+켜는 걸 잊거나 켠 채로 내보내는 사고"가 반복될 위험이 있었다(사람이
+기억하는 방식은 이 프로젝트에서 여러 번 실패했다). 지금은 **어느
+export 프리셋을 선택하느냐가 DEBUG_MODE를 자동으로 결정한다** - 손으로
+상수를 고칠 필요 자체가 없어졌다. 자세한 메커니즘은 `build_info.gd`의
+주석과 `docs/web_export.md`의 "DEBUG_MODE 자동 전환" 참고.
 
-`build_info.gd`의 `const DEBUG_MODE`를 연다. `true`로 되어 있으면 아래가
-전부 정식 빌드에 그대로 남는다:
+## 1. 올바른 export 프리셋을 골랐는지 확인
 
-- `scripts/dev/debug_hotkeys.gd`의 Ctrl+Shift+숫자/S/A 키보드 단축키
-  (주사위를 원하는 족보로 강제 지정, 게임 자동 진행)
-- 화면 우하단의 디버그 버튼 6개([야추][라지][풀하우스][포카드][한 칸 확정][끝까지 진행])
-- 화면 좌상단의 진단 로그(초기화 단계, `special_hand_rolled` 구독자 목록 등)
+`export_presets.cfg`에 웹 프리셋이 두 개 있다:
 
-`false`로 바꾼 뒤 `git diff build_info.gd`로 다른 값(특히 `BUILD_TIME`)이
-같이 바뀌지 않았는지도 확인하고 커밋한다.
+- **`Web (개발)`** - `custom_features=""`. DEBUG_MODE가 켜진 채로
+  나온다(디버그 단축키/버튼/화면 로그 전부 보임). 평소 개발 중 확인용.
+- **`Web (배포)`** - `custom_features="yd_release"`. 이 태그가 있으면
+  `build_info.gd`의 `DEBUG_MODE`가 자동으로 `false`가 된다. **베타/정식
+  배포는 반드시 이 프리셋으로 export한다.**
+
+```
+godot --headless --export-release "Web (배포)" "F:/Godot/web_build_release/index.html"
+```
+
+export가 끝나면 콘솔에 `BuildStamp: 배포용 빌드(yd_release 태그 있음) -
+DEBUG_MODE 꺼짐`이 찍힌다(`addons/build_stamp`가 export 시점에 바로
+알려준다) - **이 줄이 "개발용 빌드"로 찍히면 프리셋을 잘못 골랐다는
+뜻이니 그 자리에서 바로 알 수 있다.** 에디터 GUI로 export할 때도 프리셋
+드롭다운에서 이름이 `Web (배포)`인지 반드시 확인한다.
 
 ## 2. 전체 테스트 통과 확인
 
@@ -24,18 +36,47 @@ export 빌드를 계속 확인해야 해서 디버그 기능을 켜둔 채로 �
 godot --headless res://scripts/tests/test_runner.tscn
 ```
 
-387개(작업이 늘면 숫자도 늘어난다) 전부 통과해야 한다.
+844개(작업이 늘면 숫자도 늘어난다) 전부 통과해야 한다.
 
-## 3. 실제 export 빌드로 확인
+## 3. 실제 export 빌드로 "정말 꺼졌는지" 화면에서 직접 확인
 
-에디터의 "브라우저에서 실행"은 쓰지 않는다(`docs/web_export.md` 참고 — 실제
-export와 다르게 동작해서 재현 안 되는 버그가 있었다). 반드시:
-
-1. `godot --headless --path . --export-release "Web" "F:/Godot/web_build/index.html"`
-2. `F:/Godot/web_build`를 정적 서버로 서빙(`python -m http.server`)해서 브라우저로 직접 확인
-3. 위 디버그 버튼/로그가 화면에 전혀 안 보이는지 확인 — DEBUG_MODE를
-   false로 내렸는데도 뭔가 보이면 배포하면 안 된다.
+에디터의 "브라우저에서 실행"은 쓰지 않는다(`docs/web_export.md` 참고 —
+실제 export와 다르게 동작해서 재현 안 되는 버그가 있었다). 상수 값을
+읽는 게 아니라 **실제로 빌드에 구워진 값을 화면에서 직접 본다** -
+1. `F:/Godot/web_build_release`를 정적 서버로 서빙(`python -m http.server`)해서
+   브라우저로 직접 연다.
+2. 화면 좌상단(또는 콘솔)의 빌드 배너에 `디버그 꺼짐`이 찍히는지 확인한다
+   (`디버그 켜짐`이면 잘못된 프리셋으로 export된 것 - 1번부터 다시).
+3. 아래 "DEBUG_MODE가 꺼지면 사라지는 것 목록"이 화면에 전혀 안 보이는지
+   확인한다 - 디버그 버튼/단축키/화면 좌상단 진단 로그가 하나라도 보이면
+   배포하면 안 된다.
 
 ## 4. `git status`로 남은 변경사항 확인
 
 의도치 않게 커밋에 딸려 들어가는 파일이 없는지 마지막으로 확인한다.
+`build_info.gd`의 `BUILD_TIME`은 export할 때마다 자동으로 바뀌는 값이라
+커밋해도 무방하다(`DEBUG_MODE`는 이제 상수가 아니라 계산되는 값이라 이
+파일에 diff가 남지 않는다).
+
+## 참고 - DEBUG_MODE가 꺼지면(`Web (배포)`로 export하면) 사라지는 것
+
+베타 테스터에게 "이게 왜 안 보이지"라는 질문을 받지 않으려면 미리
+알아둘 것 - 아래는 전부 `Web (개발)`에는 있고 `Web (배포)`에는 없다.
+
+- `scripts/dev/debug_hotkeys.gd`의 Ctrl+Shift+숫자/S/A 키보드 단축키
+  (주사위를 원하는 족보로 강제 지정, 한 칸 확정, 게임 자동 진행)
+- 화면 우하단의 디버그 버튼 6개([야추][라지][풀하우스][포카드][한 칸 확정][끝까지 진행])
+  와 그 위의 캐시 사용량 표시(이미지/오디오 캐시 개수·용량)
+- `Main.gd`의 화면 좌상단 진단 로그(게임 시작 초기화 단계,
+  `special_hand_rolled` 구독자 목록 등)
+- 온라인 로비 화면의 전송 진단 로그 패널(`online_screen.gd`의
+  `_transfer_debug_log`)
+- 온라인 전용 `[빠른 진행]` 버튼(한 턴만 자동 처리)
+
+**베타 중에도 항상 켜져 있는 것(DEBUG_MODE와 무관)**:
+
+- **서버(`server_main.gd`) 콘솔의 모든 `[서버]`/`[서버][전송]` 로그.**
+  서버는 이 체크리스트가 다루는 클라이언트 웹 빌드와 별개로 항상
+  headless 바이너리로 직접 돌리는 것이라 이 프리셋 전환의 영향을 받지
+  않는다 - 애초에 서버 쪽 로그는 처음부터 DEBUG_MODE에 안 묶여 있다
+  (베타 운영자가 문제를 진단하는 유일한 창이므로 의도한 설계).

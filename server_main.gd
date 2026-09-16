@@ -399,8 +399,11 @@ func _handle_select_character(sender_id: int, payload: Dictionary) -> void:
 	_broadcast_room(room, NetProtocol.MSG_PLAYER_CHARACTER, {"player_index": slot_index, "meta": safe_meta})
 
 	# 3번째 재대전 버그 조사(사용자 요청) - [한 판 더] 확정이 실제로 서버에
-	# 도착하는지 눈으로 확인하기 위한 진단. DEBUG_MODE에 묶어서 배포에는 안 남는다.
-	if BuildInfo.DEBUG_MODE and room.state == Room.State.REMATCHING:
+	# 도착하는지 눈으로 확인하기 위한 진단. 서버 콘솔은 DEBUG_MODE(클라이언트
+	# 화면용 스위치)와 무관하게 항상 켜져 있다 - 베타 배포 후에도 운영자가
+	# 유일하게 볼 수 있는 창이라 여기 묶으면 안 된다(사용자 지적, 다른
+	# server_main.gd의 print()들도 전부 무조건 출력이라는 기존 관례와 통일).
+	if room.state == Room.State.REMATCHING:
 		print("[서버] 방 %s: 재대전 대기 중 슬롯 %d 캐릭터 갱신 수신(pack_hash=%s)" % [room.code, slot_index, ("있음" if pack_hash != "" else "없음")])
 
 
@@ -436,8 +439,9 @@ func _handle_ready(sender_id: int, payload: Dictionary) -> void:
 	room.slots[slot_index]["ready"] = ready_value
 
 	# 3번째 재대전 버그 조사(사용자 요청) - [한 판 더]를 눌렀을 때 실제로
-	# 서버까지 ready 메시지가 오는지 확인용. DEBUG_MODE에 묶어서 배포에는 안 남는다.
-	if BuildInfo.DEBUG_MODE and room.state == Room.State.REMATCHING:
+	# 서버까지 ready 메시지가 오는지 확인용. 서버 콘솔 로그라 DEBUG_MODE와
+	# 무관하게 항상 출력한다(위 _handle_select_character()와 같은 이유).
+	if room.state == Room.State.REMATCHING:
 		var ready_count := 0
 		var occupied_count := 0
 		for slot in room.slots:
@@ -504,8 +508,8 @@ func _maybe_start_game(room: Room) -> void:
 	if not room.accepts_lobby_actions() or not room.all_ready():
 		return
 	if room.state == Room.State.REMATCHING:
-		if BuildInfo.DEBUG_MODE:
-			print("[서버] 방 %s: 재대전 전원 준비 완료 - 전송 단계로 진입" % room.code)
+		# 서버 콘솔 로그(DEBUG_MODE 무관 - 위 _handle_ready()와 같은 이유).
+		print("[서버] 방 %s: 재대전 전원 준비 완료 - 전송 단계로 진입" % room.code)
 		room.clear_rematch_deadline()
 	_begin_transferring(room)
 

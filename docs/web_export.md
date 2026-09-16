@@ -22,6 +22,39 @@ Godot 에디터 `에디터 > 관리자 내보내기 템플릿`(또는 `Editor > 
 - **`variant/thread_support=false`**: 저장소에서 실제 `Thread`를 쓰는 곳은 `FilePickerDesktop` 하나뿐이고, `FilePicker.create()`는 웹에서 `FilePickerWeb`을 골라 그 코드 자체가 실행되지 않는다(`AssetLoader`/`VoiceBank`/`SfxBank`도 전부 동기 코드). Thread Support를 켜면 COOP/COEP 헤더가 필요해져 정적 파일 서버 설정만 복잡해지므로 끈 채로 둔다.
 - `html/head_include`: 엔진이 뜨기 전에 실행되는 진단용 스크립트(아래 "빌드 식별" 참고).
 
+## DEBUG_MODE 자동 전환 (베타 배포 후 추가)
+
+`export_presets.cfg`에 웹 프리셋이 **두 개** 있다 - `Web (개발)`
+(`custom_features=""`)과 `Web (배포)`(`custom_features="yd_release"`).
+`build_info.gd`의 `DEBUG_MODE`는 더 이상 손으로 켜고 끄는 상수가 아니라
+`not OS.has_feature("yd_release")`로 계산되는 값이라, **어느 프리셋으로
+export했는지가 DEBUG_MODE를 자동으로 정한다** - "고치는 걸 잊고 배포"
+사고 자체가 구조적으로 안 생긴다.
+
+- **왜 가능한지 실제로 확인한 방법**: 임시 Windows Desktop 프리셋에
+  `custom_features="yd_test_tag"`를 달아 export한 뒤, 그 실행 파일이
+  `OS.has_feature("yd_test_tag")`를 `true`로 돌려주는지, 반대로 에디터에서
+  같은 씬을 그냥 실행했을 때는 `false`인지 직접 실행해서 확인했다
+  (`godot --headless res://...tscn`으로 직접 실행 vs
+  `--export-release`로 내보낸 뒤 그 바이너리를 실행 - 전자는 시종일관
+  `false`, 후자만 `true`). Custom Features 태그는 **실제 export에서만
+  바이너리에 구워지고, 에디터의 "실행" 버튼에는 절대 안 붙는다**는 게
+  이걸로 확정됐다 - 그래서 "에디터에서는 항상 디버그가 켜져 있어야
+  한다"는 요구사항이 코드를 안 갈라도 저절로 만족된다. 검증용 프리셋/
+  씬은 확인 후 전부 지워서 저장소에 안 남는다.
+- **export 시점 확인**: `addons/build_stamp`가 export가 시작되는 순간
+  콘솔에 `BuildStamp: 배포용 빌드(yd_release 태그 있음) - DEBUG_MODE
+  꺼짐` 또는 `개발용 빌드(...) - DEBUG_MODE 켜짐`을 바로 찍어준다 -
+  실행 결과를 기다릴 필요 없이 export 버튼을 누른 그 자리에서 프리셋을
+  잘못 고르지 않았는지 알 수 있다.
+- **런타임 확인**: 게임이 시작될 때 찍히는 빌드 배너(아래 "빌드 식별")
+  자체에 `디버그 켜짐`/`디버그 꺼짐`이 같이 찍힌다 - 상수 값을 눈으로
+  믿는 대신 실제로 그 빌드에 구워진 값을 화면에서 바로 확인한다.
+- **서버(`server_main.gd`) 콘솔 로그는 이 전환과 무관하다** - 서버는 이
+  Web 프리셋들과 별개의 headless 바이너리로 항상 따로 돌리고, 서버 쪽
+  `print()`는 처음부터 DEBUG_MODE에 안 묶여 있다(운영자가 보는 유일한
+  진단 창이라 항상 켜둬야 하므로 - `docs/deployment_checklist.md` 참고).
+
 ## 로컬 서버로 서빙 — `file://`로 직접 열면 안 되는 이유
 
 브라우저는 `file://` 프로토콜에서 `fetch()`(Godot의 `.pck`/`.wasm` 로딩이 이걸 씀)를 CORS 정책으로 막는다. 그래서 export한 `index.html`을 더블클릭해서 열면 리소스를 하나도 못 불러오고 조용히 실패하거나 에러만 뜬다. 반드시 정적 파일 서버를 거쳐야 한다:
@@ -38,7 +71,9 @@ python -m http.server 8060
 1. 확인하려는 씬이 `project.godot`의 `run/main_scene`으로 지정돼 있는지 확인한다.
 2. 내보내기:
    - 에디터 GUI: `프로젝트 > 내보내기` → Web 프리셋 → 내보내기(Export Project).
-   - CLI: `godot --headless --export-release "Web" "F:/Godot/web_build/index.html"`.
+   - CLI: `godot --headless --export-release "Web (개발)" "F:/Godot/web_build/index.html"`.
+     베타/정식 배포용 빌드는 `"Web (배포)"` 프리셋을 쓴다(아래 "DEBUG_MODE
+     자동 전환" 참고, `docs/deployment_checklist.md`에 절차 있음).
    - 어느 쪽이든 `addons/build_stamp`가 자동으로 `build_info.gd`에 빌드 시각을 찍는다.
 3. 위 방법으로 로컬 서버를 띄우고 접속한다.
 4. **가장 먼저, 페이지 좌상단 빌드 배너부터 확인한다**(아래 "빌드 식별" 참고) — 이거 없이 테스트를 시작하면 옛날 빌드를 붙잡고 왜 안 되냐며 헤매게 된다. 실제로 여러 세션에 걸쳐 이걸로 시간을 많이 썼다.
