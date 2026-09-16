@@ -94,7 +94,7 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 ### 1-6(캐릭터 편집 UI) 완료 요약
 - **`scenes/character_editor/character_editor.tscn`**: 3단 레이아웃(좌 목록/중앙 이미지+이름+볼륨/우 보이스 매핑). `character_editor.gd`가 오케스트레이터로 "지금 편집 중인 프로필"과 dirty 플래그만 들고 있고, 3개 패널(`character_list_panel.gd`/`image_editor_panel.gd`/`voice_mapping_panel.gd`)은 상태를 모른 채 emit/받기만 한다. Main.tscn이 아니라 별도 씬으로 만들어서 Main.gd가 `[캐릭터 관리]` 버튼을 누르면 `instantiate()`해서 오버레이로 띄우고 닫으면 `queue_free()`한다.
 - **저장 모델(대화 중 사용자가 직접 고친 부분)**: 이미지/보이스 파일은 고르는 즉시 `CharacterLibrary.save_asset_bytes()`로 디스크에 쓰지만(미리보기도 즉시 갱신), `[제거]`는 profile 필드만 지우고 실제 파일 삭제는 안 한다. `[저장]` = `manifest.json` 갱신 + **그 manifest가 안 가리키는 파일을 전부 정리**(`CharacterLibrary.save_profile()` 안에 통합, 별도의 "삭제 예정" 상태 없음). 저장 실패 시 아무것도 안 지워진다. 이미지를 여러 번 바꿔보고 저장 안 하고 나가도 고아 파일이 안 쌓인다(1-7 캐릭터 팩 zip에 안 딸려 들어가고 2-5의 20MB 전송 상한도 안 갉아먹음).
-- **보이스 매핑**: `GameEvents.VOICE_EVENTS` 테이블을 그대로 읽어 10행을 자동 생성(하드코딩 없음 - 테이블에 항목이 늘면 화면도 저절로 늘어남). 테이블에 `"frequency": "once"/"frequent"` 필드를 추가해서 "한 판에 한 번"(게임 시작/승리/패배/보너스/야추 포기)과 "자주 반복"(내 차례/야추/라지 스트레이트/풀 하우스/포카드)을 시각적으로 구분한다. 보이스가 없는 이벤트는 흐리게. 볼륨 슬라이더(`profile.volume_db`)를 조절하면 재생 중인 미리듣기에 바로 반영됨.
+- **보이스 매핑**: `GameEvents.VOICE_EVENTS` 테이블을 그대로 읽어 행을 자동 생성(하드코딩 없음 - 테이블에 항목이 늘거나 줄면 화면도 저절로 따라감). 처음엔 10행이었으나 야추 포기(yacht.zero)를 뺀 뒤로 9행이다(아래 "1-4B 후속" 참고). 테이블에 `"frequency": "once"/"frequent"` 필드를 추가해서 "한 판에 한 번"(게임 시작/승리/패배/보너스)과 "자주 반복"(내 차례/야추/라지 스트레이트/풀 하우스/포카드)을 시각적으로 구분한다. 보이스가 없는 이벤트는 흐리게. 볼륨 슬라이더(`profile.volume_db`)를 조절하면 재생 중인 미리듣기에 바로 반영됨.
 - **FilePicker는 패널당 1개만 공유**(이미지 패널 1개, 보이스 패널 1개) — "지금 어느 슬롯/이벤트를 위해 열었는지"만 기억하고, 선택 진행 중엔 그 패널의 다른 추가 버튼을 비활성화해서 웹의 비동기 콜백이 꼬이지 않게 함.
 - **알려진 제약**: 웹에서는 이미지/보이스 모두 한 번에 1개만 선택됨(1-5의 FileAccessWeb 애드온 한계, 그대로 이어받음).
 - **공유 유틸 2개를 새로 뽑음**: `scripts/ui/texture_fit.gd`(TextureRect 비율 유지 배치, contain/cover), `scripts/characters/character_portrait.gd`(프로필의 어느 파일을 읽을지 + 실루엣 폴백 결정) — 원래 `Main.gd`에 있던 로직을 그대로 옮긴 것이라 게임 화면 동작은 안 바뀌었고, 캐릭터 선택 화면도 같은 로직을 재사용한다.
@@ -713,8 +713,88 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   `player_ready_changed`/`room_player_count_changed`를 로비 때와
   똑같이 받으므로 새 핸들러가 필요 없었다.
 
+### 2-6B 후속 — 사용자 실제 확인 중 발견한 서버 크래시(재대전이 안 되던 진짜 원인)
+사용자가 실제 브라우저로 재대전을 시도하다가 서버 콘솔에서
+`SCRIPT ERROR: Trying to assign value of type 'Nil' to a variable of type
+'Dictionary'. at: _service_rematch_rooms (server_main.gd:653)`를
+`_process()` 안에서 매 프레임 반복해서 봤다고 보고 - `[한 판 더]` 안내창이
+안 닫히는 증상의 원인이었다.
+
+- **근본 원인**: `REMATCHING` 중 한 명이 `[나가기]`(자발적 `leave()`)로
+  나가면 그 슬롯이 `null`이 된다(2-6B가 의도한 정상 상태 - "인원이
+  모자란 재대전 로비"). 그런데 `_service_rematch_rooms()`의 두 반복문이
+  `var slot: Dictionary = room.slots[i]`처럼 배열 원소를 **null 검사보다
+  먼저** 타입 있는 `Dictionary` 변수에 대입하고 있었다 - GDScript는
+  `null`을 `Dictionary` 타입 변수에 대입하는 순간 그 자리에서 런타임
+  에러를 내므로, 바로 다음 줄의 `if slot != null` 검사는 이미 늦다.
+  이 함수는 `_process()`에서 매 프레임 불리므로, 슬롯 하나가 비워진
+  방이 존재하는 한 서버가 **매 프레임** 같은 자리에서 죽었다 - 크래시
+  자체가 서버 프로세스를 끝내지는 않지만, 그 프레임의 나머지 처리(패킷
+  큐 소비 등)를 막아서 겉보기엔 "버튼이 안 먹는다"로만 보였다.
+- **같은 모양이 2-5(캐릭터 팩 전송)에도 이미 두 곳 있었다**: 재대전이
+  전송 단계를 재사용하면서 이 함정을 밟을 조건(전송 도중 수신자가
+  나감)도 같이 노출됐다 - `_warn_if_transfer_stalled()`와
+  `_handle_upload_pack_chunk()`의 청크 릴레이 루프, 그리고
+  `RoomManager.force_vacate_slot()`도 전부 같은 패턴이었다. 넷 다
+  null 검사를 원본 배열 원소에 먼저 하도록 고쳤다.
+- **근본 수정**: 중복되던 "점유+미준비 슬롯 찾기" 판단을
+  `Room.not_ready_occupied_slots()` 하나로 합쳐서(`players_summary()`가
+  이미 쓰던 안전한 패턴 - 타입 없이 받아서 null 검사 먼저) 같은 실수를
+  두 곳에 반복할 여지 자체를 없앴다. `_service_rematch_rooms()`의 타임아웃
+  처리 루프와 매초 카운트다운 방송 루프 둘 다 이 함수 하나만 쓴다.
+- **재현 조건**: 게임 종료 → `REMATCHING` → 한 명이 `[나가기]`(자발적
+  이탈, 그레이스 없이 즉시 슬롯이 `null`이 됨) → 남은 한 명이 아직
+  `[한 판 더]`를 안 누른 상태. 이 조건이면 그 다음 1초 주기 카운트다운
+  방송 때(또는 2분 대기 초과 처리 때) 100% 재현됐다 - "두 번째 시도부터
+  안 뜬다"는 보고는 버그가 사라진 게 아니라, 재시도할 때 두 명 다
+  `[한 판 더]`만 누르고 아무도 `[나가기]`를 안 눌러 이 조건(슬롯이 null이
+  되는 상황)을 다시 안 밟은 것이었다.
+- **새 테스트 6개**: `test_room_rematch.gd`에 `not_ready_occupied_slots()`
+  기본 동작 2개 + **버그 재현 조건을 그대로 박은 회귀 테스트**(재대전
+  대기 중 한 슬롯을 `vacate_by_peer()`로 비운 채 호출해도 크래시 없이
+  남은 슬롯만 반환하는지). `test_room_manager.gd`에 `force_vacate_slot()`을
+  이미 빈 슬롯/범위 밖 인덱스에 또 불러도 크래시 없는지 2개.
+- **실제 소켓으로 크래시 조건을 그대로 재현해 수정 전/후 확인**: 2인
+  게임 종료 → REMATCHING → 남은 한 명(A)이 아직 미준비인 채로 다른 한
+  명(B)이 `leave()` → 서버가 `SCRIPT ERROR` 없이 살아있는지, A가 여전히
+  `player_timer(kind=rematch)` 카운트다운을 정상 수신하는지(3.2초간 3회
+  수신 확인), 새 참가자가 빈 슬롯에 들어와 실제로 2판째가 시작되는지
+  (`current_player=0`)까지 전부 확인함. 검증 스크립트는 확인 후 삭제.
+- 전체 793개 통과(+6).
+
+### 1-4B 후속 — 야추 포기(yacht.zero) 보이스를 목록에서 제거
+사용자 요청: 야추 포기(yacht.zero)를 캐릭터 편집 화면의 보이스 매핑
+대상에서 뺀다. 1-4B에서 `yacht.roll`/`hold` 등을 뺐을 때와 같은 방식 -
+`GameEvents.zero_scored` 시그널과 이벤트 릴레이는 그대로 남기고(나중에
+다시 쓸 수도 있음), 캐릭터 보이스로만 더 이상 반응하지 않게 했다.
+
+- **`autoload/game_events.gd`**: `VOICE_EVENTS`에서 `Yacht.ZERO` 행을
+  제거(10개 → 9개). `Yacht.ZERO = "yacht.zero"` 상수 자체는 남겨뒀다 -
+  `zero_scored` 시그널의 카테고리 판정 등에서 여전히 의미 있는 값이고,
+  제거 대상은 어디까지나 "보이스로 반응하는 목록"이지 이 개념 자체가
+  아니다.
+- **`autoload/voice_bank.gd`**: `zero_scored` 구독과 `_on_zero_scored()`
+  핸들러, `_event_priority`의 ZERO 등록, `PRIORITY_ZERO` 상수를 전부
+  제거했다 - 테이블에서만 빼고 재생 로직은 살려두면 "1-4B와 같은 방식"이
+  아니게 된다(yacht.roll/hold는 애초에 VoiceBank 재생 로직 자체가 없다).
+- **1-6 편집 화면은 확인만 하고 코드를 안 고쳤다** - `voice_mapping_panel.gd`가
+  `GameEvents.VOICE_EVENTS`를 그대로 순회해서 행을 그리므로 9행으로
+  저절로 줄어든다.
+- **기존 캐릭터 팩과의 호환(원칙 6)**: `CharacterProfile._sanitize_voice_map()`이
+  애초에 키 이름을 `VOICE_EVENTS`와 대조하지 않고 문자열 키 + 배열 값이면
+  그대로 통과시키므로, manifest에 `yacht.zero` 매핑이 남아있는 옛날 팩도
+  에러 없이 그대로 가져와진다 - 그 매핑은 단지 아무도 안 읽는 죽은
+  데이터로 조용히 남을 뿐이다. 실제로 그런 팩(zip)을 직접 만들어
+  가져오기가 성공하는지, `save_profile()`의 고아 파일 정리가 이 매핑이
+  가리키는 파일을 잘못 지우지 않는지까지 새 테스트로 확인했다
+  (`test_character_pack.gd::_test_orphaned_voice_event_key_is_imported_without_error`).
+- `docs/character_pack.md`는 확인해봤지만 보이스 이벤트를 개수로 나열한
+  부분이 원래 없어서(단일 예시 `voice_map` 키 하나만 보여줌) 고칠 곳이
+  없었다.
+- 전체 799개 통과(+6).
+
 ### 현재 전체 테스트 개수
-787개 (`scripts/tests/test_runner.tscn`, 전부 통과).
+799개 (`scripts/tests/test_runner.tscn`, 전부 통과).
 
 ### 🚨 배포 전 필수 확인: `build_info.gd`의 `DEBUG_MODE`를 `false`로
 `DEBUG_MODE`는 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치다. **지금은
@@ -753,6 +833,20 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
 - Ctrl+Shift+S / [한 칸 확정] 버튼 : 현재 플레이어의 빈 칸 하나 자동 확정
 - Ctrl+Shift+A / [끝까지 진행] 버튼 : 게임이 끝날 때까지 자동 진행
 (키보드 단축키는 텍스트 입력 위젯에 포커스가 있으면 전부 무시된다.)
+
+### 온라인 전용 [빠른 진행] 버튼(`scenes/Main.gd`, `DEBUG_MODE` + 온라인일 때만)
+2-4에서 "온라인엔 디버그 UI를 숨긴다"고 정한 원칙의 명시적 예외(사용자
+요청) - 위 디버그 단축키/버튼은 로컬 전용 `GameState`를 직접 조작하는
+방식이라 온라인(read_only 사본)에는 애초에 안 먹는다. 2-6/2-6B를 실제
+브라우저 2개로 반복 확인할 때 한 턴을 넘기려고 클릭을 여러 번 하는
+수고를 덜기 위한 것으로, 새 네트워크 메시지는 하나도 안 만들고 기존
+`request_roll`/`request_score`만 그대로 순서대로 보낸다(서버 입장에서는
+사람이 빠르게 클릭한 것과 구별되지 않고, 턴 권한 검사도 그대로 통과해야
+함). 내 턴에 누르면 안 굴렸으면 굴리고 → 빈 칸 중 아무거나(가장 낮은
+인덱스) 하나 확정 → **딱 한 턴만 처리하고 멈춘다**(연속 자동 아님 -
+상대 턴까지 자동으로 넘기면 재대전/연결 끊김처럼 눈으로 확인하려던
+동작 자체를 가리게 됨). `DEBUG_MODE=false`면(배포 체크리스트 항목)
+당연히 안 보인다.
 
 ### 1-6 완료 — 웹에서도 최종 확인됨
 캐릭터 편집 UI, 게임 시작 전 캐릭터 선택 화면, 화면 전환 정리(버그 1),

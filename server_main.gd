@@ -552,10 +552,15 @@ func _warn_if_transfer_stalled(room: Room, now: int) -> void:
 	var stalled_sec := (now - room.transfer_last_chunk_msec) / 1000.0
 	var queue_info: Array[String] = []
 	for recipient_index in room.current_transfer_recipients():
+		# room.slots[i]가 null(빈 슬롯 - 수신자가 그 사이 나감)일 수 있어서
+		# 타입 있는 변수에 옮기기 전에 먼저 null인지 본다(server_main.gd의
+		# _service_rematch_rooms에서 겪은 것과 같은 함정 - "!= null" 검사를
+		# 대입 뒤에 하면 이미 늦다).
+		if room.slots[recipient_index] == null:
+			continue
 		var recipient_slot: Dictionary = room.slots[recipient_index]
-		if recipient_slot != null:
-			var peer_id: int = recipient_slot["peer_id"]
-			queue_info.append("peer %d 대기열 %d개" % [peer_id, _outgoing_queues.get(peer_id, []).size()])
+		var peer_id: int = recipient_slot["peer_id"]
+		queue_info.append("peer %d 대기열 %d개" % [peer_id, _outgoing_queues.get(peer_id, []).size()])
 	print("[서버][전송][경고] 방 %s: %.0f초간 진전 없음 - 마지막 청크 %d/%d(해시=%s), %s" % [
 		room.code, stalled_sec, room.transfer_last_chunk_sequence + 1, room.transfer_last_chunk_total,
 		room.transfer_current_hash.substr(0, 8), ", ".join(queue_info) if not queue_info.is_empty() else "(수신자 없음)",
@@ -623,11 +628,11 @@ func _service_rematch_rooms(now: int) -> void:
 			continue
 
 		if room.is_rematch_wait_timed_out(now):
-			var not_ready_slots: Array = []
-			for i in room.slots.size():
-				var slot: Dictionary = room.slots[i]
-				if slot != null and not slot["ready"]:
-					not_ready_slots.append(i)
+			# room이 room_manager.rooms.values()(타입 없는 Dictionary)의
+			# 루프 변수라 Variant로 취급돼서, 반환 타입이 있는 메서드를
+			# 불러도 := 로는 타입 추론이 안 된다(이 세션에서 반복된 함정) -
+			# 명시적으로 타입을 적어준다.
+			var not_ready_slots: Array = room.not_ready_occupied_slots()
 
 			# 방송을 전부 먼저 끝내고 나서 비운다(2개 이상 슬롯이 한 번에
 			# 시간 초과될 수 있음) - _broadcast_room()은 그 순간의
@@ -649,10 +654,8 @@ func _service_rematch_rooms(now: int) -> void:
 		_next_timer_broadcast_msec[room.code] = now + 1000
 
 		var rematch_secs := maxi(0, int(ceil((room.rematch_deadline_msec - now) / 1000.0)))
-		for i in room.slots.size():
-			var slot: Dictionary = room.slots[i]
-			if slot != null and not slot["ready"]:
-				_broadcast_room(room, NetProtocol.MSG_PLAYER_TIMER, {"player_index": i, "kind": "rematch", "seconds_left": rematch_secs})
+		for i in room.not_ready_occupied_slots():
+			_broadcast_room(room, NetProtocol.MSG_PLAYER_TIMER, {"player_index": i, "kind": "rematch", "seconds_left": rematch_secs})
 
 
 ## 큐에서 다음 해시를 꺼내 전송을 시작하거나(방 전체에 pack_upload_requested
@@ -788,9 +791,12 @@ func _handle_upload_pack_chunk(sender_id: int, payload: Dictionary) -> void:
 
 	var data := str(payload.get("data", ""))
 	for recipient_index in recipients:
-		var recipient_slot: Dictionary = room.slots[recipient_index]
-		if recipient_slot == null:
+		# 같은 함정(위 _warn_if_transfer_stalled 참고) - null을 그대로
+		# Dictionary 변수에 대입하면 그 자리에서 에러가 나서 바로 아래
+		# null 검사가 무의미해진다. 원본 배열 원소를 먼저 검사한다.
+		if room.slots[recipient_index] == null:
 			continue
+		var recipient_slot: Dictionary = room.slots[recipient_index]
 		var peer_id: int = recipient_slot["peer_id"]
 		var seq_display: int = sequence + 1
 		var room_code: String = room.code

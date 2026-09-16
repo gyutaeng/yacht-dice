@@ -37,6 +37,8 @@ func run(r) -> void:
 	_test_join_room_during_rematching_allows_fresh_join(r)
 	_test_join_room_during_rematching_prefers_token_match(r)
 	_test_involuntary_disconnect_during_rematching_keeps_slot(r)
+	_test_force_vacate_slot_on_already_empty_slot_does_not_crash(r)
+	_test_force_vacate_slot_out_of_range_does_not_crash(r)
 
 
 func _test_room_code_shape(r) -> void:
@@ -295,6 +297,32 @@ func _test_involuntary_disconnect_during_rematching_keeps_slot(r) -> void:
 	r.expect_eq("슬롯 인덱스는 그대로 1번", result["slot_index"], 1)
 	r.expect_true("슬롯 자체는 안 비워짐", room.slots[1] != null)
 	r.expect_eq("연결 상태는 GRACE_PERIOD", room.slot_connection_state[1], Room.ConnectionState.GRACE_PERIOD)
+
+
+## 2-6B - 이미 빈 슬롯을 다시 force_vacate_slot()하면(예: 같은 슬롯이
+## 두 타임아웃 처리 경로에서 겹쳐 걸리는 경우) 조용히 아무 일도 안 해야
+## 한다. 예전엔 `var slot: Dictionary = room.slots[slot_index]`가 null을
+## 그대로 타입 있는 변수에 대입해서 이 호출 자체가 런타임 에러였다
+## (server_main.gd의 _service_rematch_rooms를 매 프레임 멈추게 한 것과
+## 같은 함정).
+func _test_force_vacate_slot_on_already_empty_slot_does_not_crash(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+	room_manager.join_room(room.code, 2)
+
+	room_manager.force_vacate_slot(room, 1)
+	r.expect_true("슬롯 1 비워짐", room.slots[1] == null)
+
+	room_manager.force_vacate_slot(room, 1)  # 이미 빈 슬롯을 또 비움 - 크래시 없어야 함
+	r.expect_true("두 번째 호출도 크래시 없이 그대로 빈 채로 유지", room.slots[1] == null)
+
+
+func _test_force_vacate_slot_out_of_range_does_not_crash(r) -> void:
+	var room_manager := RoomManager.new()
+	var room := room_manager.create_room(2, 1)
+
+	room_manager.force_vacate_slot(room, 99)  # 범위 밖 인덱스 - 크래시 없어야 함
+	r.expect_true("범위 밖 인덱스는 조용히 무시됨(슬롯 0 그대로)", room.slots[0] != null)
 
 
 ## 방마다 SecureRandom.generate_seed()를 새로 호출해서 시드를 뽑으므로,

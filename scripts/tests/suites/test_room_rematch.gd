@@ -40,6 +40,9 @@ func run(r) -> void:
 	_test_start_new_game_resets_state(r)
 	_test_start_new_game_keeps_same_rng(r)
 	_test_three_consecutive_rounds_no_contamination(r)
+	_test_not_ready_occupied_slots_basic(r)
+	_test_not_ready_occupied_slots_ignores_ready(r)
+	_test_not_ready_occupied_slots_skips_vacated_slot_during_rematch(r)
 
 
 func _test_accepts_lobby_actions(r) -> void:
@@ -139,3 +142,33 @@ func _test_three_consecutive_rounds_no_contamination(r) -> void:
 		r.expect_eq("%d판째 시작은 항상 플레이어 0" % (round_num + 2), room.game_state.current_player, 0)
 		r.expect_eq("%d판째 시작 시 총점이 전부 0(누적 전적 없음)" % (round_num + 2), room.game_state.get_player_total(0), 0)
 		r.expect_eq("2-5 전송 재시도 카운터가 라운드마다 안 쌓임(비어있음)", room.transfer_resend_request_counts.size(), 0)
+
+
+func _test_not_ready_occupied_slots_basic(r) -> void:
+	var room := _make_in_game_room()
+	room.begin_rematch_wait(1000)
+	r.expect_eq("둘 다 준비 안 하면 둘 다 목록에", room.not_ready_occupied_slots(), [0, 1])
+
+
+func _test_not_ready_occupied_slots_ignores_ready(r) -> void:
+	var room := _make_in_game_room()
+	room.begin_rematch_wait(1000)
+	room.slots[0]["ready"] = true
+	r.expect_eq("준비된 슬롯은 빠짐", room.not_ready_occupied_slots(), [1])
+
+
+## 실제로 서버를 죽였던 버그의 재현 조건 - 재대전 대기 중 한 명이
+## [나가기](자발적 이탈)로 슬롯을 완전히 비우면 그 슬롯은 null이 된다.
+## not_ready_occupied_slots()는 크래시 없이 남은 사람만 돌려줘야 한다.
+## (이전 구현은 `var slot: Dictionary = room.slots[i]`처럼 null을 그대로
+## 타입 있는 변수에 대입해서 "!= null" 검사보다 먼저 런타임 에러가 났고,
+## 이게 server_main.gd의 _process() 안에서 매 프레임 반복돼 재대전
+## 기능 전체가 조용히 멈췄다 - _service_rematch_rooms()가 이 함수를
+## 쓰도록 고쳐서 같은 실수가 한 곳에서만 나게 만들었다.)
+func _test_not_ready_occupied_slots_skips_vacated_slot_during_rematch(r) -> void:
+	var room := _make_in_game_room()
+	room.begin_rematch_wait(1000)
+	room.vacate_by_peer(PEER_B)  # 슬롯 1을 자발적 이탈로 완전히 비움(null)
+
+	var result := room.not_ready_occupied_slots()
+	r.expect_eq("남아있는 슬롯 0만 반환(빈 슬롯 1은 제외, 크래시 없음)", result, [0])

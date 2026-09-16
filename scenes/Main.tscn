@@ -302,6 +302,12 @@ layout_mode = 2
 disabled = true
 text = "점수 확정"
 
+[node name="QuickProgressButton" type="Button" parent="GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow"]
+visible = false
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+text = "빠른 진행"
+
 [node name="ScoreboardRow" type="HBoxContainer" parent="GameScreen/Margin/MainHBox/RightColumn" unique_id=1672270891]
 layout_mode = 2
 theme_override_constants/separation = 4

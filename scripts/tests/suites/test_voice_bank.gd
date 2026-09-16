@@ -26,7 +26,7 @@ func run(r) -> void:
 
 
 func _test_voice_events_table(r) -> void:
-	r.expect_eq("VOICE_EVENTS는 정확히 10개", GameEvents.VOICE_EVENTS.size(), 10)
+	r.expect_eq("VOICE_EVENTS는 정확히 9개", GameEvents.VOICE_EVENTS.size(), 9)
 
 	var seen_keys := {}
 	var all_have_label_and_description := true
@@ -41,13 +41,13 @@ func _test_voice_events_table(r) -> void:
 		GameEvents.Common.WIN, GameEvents.Common.LOSE,
 		GameEvents.Yacht.YACHT, GameEvents.Yacht.LARGE_STRAIGHT,
 		GameEvents.Yacht.FULL_HOUSE, GameEvents.Yacht.FOUR_OF_A_KIND,
-		GameEvents.Yacht.BONUS, GameEvents.Yacht.ZERO,
+		GameEvents.Yacht.BONUS,
 	]
 	var all_present := true
 	for key in expected_keys:
 		if not seen_keys.has(key):
 			all_present = false
-	r.expect_true("Common/Yacht의 10개 키가 전부 VOICE_EVENTS에 있음", all_present)
+	r.expect_true("Common/Yacht의 9개 키가 전부 VOICE_EVENTS에 있음", all_present)
 	r.expect_eq("VOICE_EVENTS에 예상 밖의 키가 없음", seen_keys.size(), expected_keys.size())
 
 	# yacht.roll/reroll/hold/big_score/small_score는 보이스 테이블에서 빠져야 한다
@@ -57,6 +57,12 @@ func _test_voice_events_table(r) -> void:
 	r.expect_true("Yacht 딕셔너리에 HOLD 키가 없음", not GameEvents.Yacht.has("HOLD"))
 	r.expect_true("Yacht 딕셔너리에 BIG_SCORE 키가 없음", not GameEvents.Yacht.has("BIG_SCORE"))
 	r.expect_true("Yacht 딕셔너리에 SMALL_SCORE 키가 없음", not GameEvents.Yacht.has("SMALL_SCORE"))
+
+	# 야추 포기(ZERO)는 Yacht 딕셔너리/zero_scored 시그널 자체는 남아있지만
+	# (나중에 다시 쓸 수도 있음), 보이스 테이블/재생 우선순위 표에서는 빠져야
+	# 한다 - 이번에 제거한 대상이라 직접 명시해서 회귀를 잡는다.
+	r.expect_true("Yacht 딕셔너리에 ZERO 키는 남아있음(신호 자체는 유지)", GameEvents.Yacht.has("ZERO"))
+	r.expect_true("VOICE_EVENTS에는 ZERO가 없음", not seen_keys.has(GameEvents.Yacht.ZERO))
 
 
 func _test_event_key_for_category(r) -> void:
@@ -122,9 +128,9 @@ func _test_priority_ordering(r) -> void:
 	r.expect_true("승리/패배가 야추보다 우선순위 높음", p[GameEvents.Common.WIN] > p[GameEvents.Yacht.YACHT])
 	r.expect_eq("승리와 패배는 같은 우선순위", p[GameEvents.Common.WIN], p[GameEvents.Common.LOSE])
 	r.expect_true("야추가 나머지 특수 족보보다 우선순위 높음", p[GameEvents.Yacht.YACHT] > p[GameEvents.Yacht.FOUR_OF_A_KIND])
-	r.expect_true("보너스가 야추 포기보다 우선순위 높음", p[GameEvents.Yacht.BONUS] > p[GameEvents.Yacht.ZERO])
-	r.expect_true("야추 포기가 게임 시작 인사보다 우선순위 높음", p[GameEvents.Yacht.ZERO] > p[GameEvents.Common.GAME_START])
+	r.expect_true("보너스가 게임 시작 인사보다 우선순위 높음", p[GameEvents.Yacht.BONUS] > p[GameEvents.Common.GAME_START])
 	r.expect_true("게임 시작 인사가 내 차례보다 우선순위 높음", p[GameEvents.Common.GAME_START] > p[GameEvents.Common.TURN_START])
+	r.expect_true("야추 포기(ZERO)는 보이스에서 빠졌으므로 우선순위 표에도 없음", not p.has(GameEvents.Yacht.ZERO))
 
 
 ## 1-4C: 전원이 game_start 보이스를 안 가진 경우(내장 기본 캐릭터만 있는

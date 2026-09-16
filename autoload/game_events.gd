@@ -51,8 +51,13 @@ const Yacht := {
 # "frequency"는 캐릭터 편집 UI가 "한 판에 한 번만 나오는 이벤트"와 "자주
 # 나오는 이벤트"를 시각적으로 구분하는 데 쓴다("once" | "frequent").
 # once = 한 플레이어 기준 한 판에 최대 1번만 성립 가능(구조적으로 반복 불가).
-# 야추 포기(ZERO)도 야추 칸이 하나뿐이라 once다 — 반복 가능한 건 주사위를
-# "다시" 굴려서 또 나올 수 있는 특수 족보/차례뿐이라 frequent.
+# 반복 가능한 건 주사위를 "다시" 굴려서 또 나올 수 있는 특수 족보/차례뿐이라
+# frequent.
+#
+# 야추 포기(ZERO, "yacht.zero")는 이 목록에서 뺐다 - GameEvents.zero_scored
+# 시그널 자체와 이벤트 릴레이는 그대로 남아있지만(나중에 다시 쓸 수도 있음),
+# 캐릭터 보이스로는 더 이상 반응하지 않는다(1-4B에서 yacht.roll/hold 등을
+# 뺐을 때와 같은 방식 - 시그널은 살아있어도 이 표에는 없는 것들).
 const VOICE_EVENTS := [
 	{
 		"key": Common.GAME_START,
@@ -106,12 +111,6 @@ const VOICE_EVENTS := [
 		"key": Yacht.BONUS,
 		"label": "상단 보너스",
 		"description": "상단 섹션 합계 63점을 넘겨 보너스를 처음 달성했을 때 재생됩니다.",
-		"frequency": "once",
-	},
-	{
-		"key": Yacht.ZERO,
-		"label": "야추 포기",
-		"description": "야추 칸을 0점으로 포기할 때 재생됩니다. 다른 칸을 0점으로 확정할 때는 재생되지 않습니다.",
 		"frequency": "once",
 	},
 ]

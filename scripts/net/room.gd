@@ -284,6 +284,30 @@ func all_ready() -> bool:
 	return true
 
 
+## 2-6B - 재대전 대기 중(REMATCHING) 아직 "한 판 더"를 안 누른 채로
+## 남아있는 "점유된" 슬롯의 인덱스 목록. 빈 슬롯(null - 나가서 자리
+## 자체가 빈 경우)은 준비할 사람이 없으므로 제외한다.
+##
+## server_main.gd의 _service_rematch_rooms()가 이 하나만 쓴다(타임아웃
+## 처리 루프와 매초 카운트다운 방송 루프 둘 다) - 예전엔 이 판단을
+## server_main.gd 안에 두 번 따로 두었다가, `var slot: Dictionary =
+## slots[i]`처럼 배열 원소를 null 검사 전에 타입 있는 변수에 먼저
+## 대입해버리는 실수를 두 곳 모두에 반복했다(대입 자체가 그 자리에서
+## 실패해서 바로 뒤의 "!= null" 검사는 이미 늦음) - REMATCHING 중
+## 누군가 [나가기]로 슬롯을 완전히 비우면(자리가 남에게 안 채워진 채로)
+## 매 프레임 서버가 여기서 죽어 재대전 자체가 멈췄었다. `slot`을
+## 타입 없이 받아서(players_summary()와 같은 패턴) null 검사가 먼저
+## 먹히게 고치고, 판단 로직을 이 함수 하나로 합쳐 같은 실수를 두 번
+## 반복할 여지를 없앴다.
+func not_ready_occupied_slots() -> Array:
+	var result: Array = []
+	for i in slots.size():
+		var slot = slots[i]
+		if slot != null and not slot["ready"]:
+			result.append(i)
+	return result
+
+
 ## 2-6B - "캐릭터 선택/준비/인원수 변경/신규 참가를 받아주는 상태"인지.
 ## LOBBY(첫 게임 전)와 REMATCHING(게임이 끝나고 다음 판을 기다리는 중)
 ## 둘 다 여기 해당한다 - 서버의 모든 로비류 메시지 핸들러와

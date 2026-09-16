@@ -54,6 +54,11 @@ var bold_font: Font  # 확정된 점수 표시용. Pretendard Bold를 그대로 
 # 점수판에서 "선택"만 된 상태(아직 확정 아님). 주사위를 다시 굴리면 해제된다.
 var selected_category: int = -1
 
+## 빠른 진행 버튼(DEBUG_MODE, 온라인 전용)이 굴리기->확정을 순서대로 처리하는
+## 중인지 - 연타로 두 번 겹쳐 들어가는 것만 막는다(그 외 버튼 활성화 여부는
+## _is_my_turn()/is_request_pending()이 이미 담당).
+var _quick_progress_running: bool = false
+
 # score_labels[player][category] -> Label(확정/빈칸), preview_buttons[player][category] -> Button(미확정 미리보기, 누르면 확정)
 var score_labels: Array = []
 var preview_buttons: Array = []
@@ -131,6 +136,9 @@ var _greeting_active: bool = false
 @onready var reroll_label: Label = $GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/RerollLabel
 @onready var roll_button: Button = $GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow/RollButton
 @onready var confirm_score_button: Button = $GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow/ConfirmScoreButton
+## DEBUG_MODE 전용, 온라인에서만 보임(2-6/2-6B 테스트 편의) - 아래
+## _on_quick_progress_button_pressed() 참고.
+@onready var quick_progress_button: Button = $GameScreen/Margin/MainHBox/RightColumn/DiceAndControls/ButtonsRow/QuickProgressButton
 
 @onready var scoreboard_row: HBoxContainer = $GameScreen/Margin/MainHBox/RightColumn/ScoreboardRow
 
@@ -255,6 +263,7 @@ func _ready() -> void:
 
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
+	quick_progress_button.pressed.connect(_on_quick_progress_button_pressed)
 	restart_button.pressed.connect(_on_restart_pressed)
 	rematch_button.pressed.connect(_on_rematch_button_pressed)
 	to_title_button.pressed.connect(_on_to_title_pressed)
@@ -707,6 +716,8 @@ func _clear_dynamic_nodes() -> void:
 	_departed_player_indices.clear()
 	leave_to_lobby_button.visible = false
 	turn_countdown_label.visible = false
+	quick_progress_button.visible = false
+	_quick_progress_running = false
 
 
 ## 내 턴인지 확인한다(로컬은 항상 true - 전원이 한 화면을 같이 쓰므로
@@ -999,6 +1010,7 @@ func _on_state_changed() -> void:
 	_refresh_character_area()
 	_refresh_scoreboard_ui()
 	_refresh_confirm_score_button()
+	_refresh_quick_progress_button()
 	_refresh_game_over_ui()
 
 
@@ -1093,6 +1105,54 @@ func _refresh_confirm_score_button() -> void:
 	var points := game_state.preview_score(selected_category)
 	confirm_score_button.disabled = active_controller.is_request_pending()
 	confirm_score_button.text = "%s %d점으로 확정" % [category_name, points]
+
+
+## DEBUG_MODE + 온라인일 때만 보인다(2-4에서 정한 "온라인엔 디버그 UI를
+## 숨긴다"는 원칙의 명시적 예외 - 사용자 요청). 로컬 게임에는 이미 Ctrl+Shift+A
+## 같은 디버그 자동 진행이 있어서 이 버튼이 필요 없다.
+func _refresh_quick_progress_button() -> void:
+	var should_show := BuildInfo.DEBUG_MODE and my_player_index != -1 and not game_state.game_over
+	quick_progress_button.visible = should_show
+	if should_show:
+		quick_progress_button.disabled = _quick_progress_running or not _is_my_turn() or active_controller.is_request_pending()
+
+
+## 내 턴을 한 번에 끝낸다: 안 굴렸으면 굴리고, 빈 칸 중 아무거나(가장 낮은
+## 인덱스) 하나 확정한다. 딱 한 턴만 처리하고 멈춘다 - 상대 턴까지 자동으로
+## 넘기면 재대전/연결 끊김 시나리오를 눈으로 확인하려던 목적을 오히려
+## 가리게 된다. 새 네트워크 메시지는 안 만들고 기존 request_roll/
+## request_score를 그대로 보낸다 - 서버 입장에서는 사람이 빠르게 클릭한
+## 것과 구별되지 않고, 권한 검사(내 턴인지 등)도 그대로 통과해야 한다.
+func _on_quick_progress_button_pressed() -> void:
+	if _quick_progress_running or active_controller == null:
+		return
+	if not _is_my_turn() or active_controller.is_request_pending():
+		return
+
+	_quick_progress_running = true
+	_refresh_quick_progress_button()
+
+	if not game_state.has_rolled:
+		active_controller.request_roll()
+		while active_controller.is_request_pending():
+			await get_tree().process_frame
+
+	if _is_my_turn() and not game_state.game_over and game_state.has_rolled:
+		var category := _find_open_category_for_quick_progress()
+		if category != -1:
+			active_controller.request_score(category)
+			while active_controller.is_request_pending():
+				await get_tree().process_frame
+
+	_quick_progress_running = false
+	_refresh_quick_progress_button()
+
+
+func _find_open_category_for_quick_progress() -> int:
+	for i in GameState.CATEGORY_NAMES.size():
+		if not game_state.is_category_confirmed(my_player_index, i):
+			return i
+	return -1
 
 
 func _refresh_game_over_ui() -> void:

@@ -7,9 +7,10 @@ extends Node
 # 게임 이벤트가 언제 일어났는지만 알면 되고, 그걸 누가 왜 일으켰는지는 몰라도 된다.
 # 오디오 디코딩은 전부 AssetLoader를 거친다(원칙 3) — 여기서 FileAccess를 직접 열지 않는다.
 #
-# 여기서 반응하는 이벤트는 GameEvents.VOICE_EVENTS에 있는 10개뿐이다. 굴림/고정/
+# 여기서 반응하는 이벤트는 GameEvents.VOICE_EVENTS에 있는 9개뿐이다. 굴림/고정/
 # 점수 크기 같은 건 너무 자주 일어나서 보이스 대상에서 빠졌다(SfxBank가 대신
-# 효과음으로 반응한다) — 시그널 자체는 여전히 GameEvents에 남아 있다.
+# 효과음으로 반응한다) — 시그널 자체는 여전히 GameEvents에 남아 있다. 야추
+# 포기(zero_scored)도 같은 이유로 뺐다(game_events.gd 주석 참고).
 
 const VOICE_CROSSFADE_DURATION := 0.1
 const VOICE_FADE_OUT_DB := -40.0
@@ -34,7 +35,6 @@ const VOICE_WAIT_TIMEOUT_MSEC := 1500
 const PRIORITY_ENDING := 100  # common.win, common.lose
 const PRIORITY_YACHT := 90
 const PRIORITY_SPECIAL_HAND := 80  # 라지 스트레이트/풀 하우스/포카드/보너스
-const PRIORITY_ZERO := 60
 const PRIORITY_GAME_START := 30
 const PRIORITY_TURN_START := 20
 
@@ -101,14 +101,12 @@ func _ready() -> void:
 	_event_priority[GameEvents.Yacht.FULL_HOUSE] = PRIORITY_SPECIAL_HAND
 	_event_priority[GameEvents.Yacht.FOUR_OF_A_KIND] = PRIORITY_SPECIAL_HAND
 	_event_priority[GameEvents.Yacht.BONUS] = PRIORITY_SPECIAL_HAND
-	_event_priority[GameEvents.Yacht.ZERO] = PRIORITY_ZERO
 	_event_priority[GameEvents.Common.GAME_START] = PRIORITY_GAME_START
 	_event_priority[GameEvents.Common.TURN_START] = PRIORITY_TURN_START
 
 	GameEvents.turn_started.connect(_on_turn_started)
 	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
 	GameEvents.bonus_achieved.connect(_on_bonus_achieved)
-	GameEvents.zero_scored.connect(_on_zero_scored)
 	GameEvents.game_ended.connect(_on_game_ended)
 
 
@@ -218,12 +216,6 @@ func _on_special_hand_rolled(player_index: int, category: int, _points: int) -> 
 
 func _on_bonus_achieved(player_index: int) -> void:
 	_play_for_player(player_index, GameEvents.Yacht.BONUS)
-
-
-# 야추 칸을 0점으로 포기할 때만 반응한다. 다른 칸의 0점은 흔한 일이라 무시한다.
-func _on_zero_scored(player_index: int, category: int) -> void:
-	if category == GameState.YACHT_CATEGORY_INDEX:
-		_play_for_player(player_index, GameEvents.Yacht.ZERO)
 
 
 func _on_game_ended(winners: Array[int], scores: Array[int]) -> void:

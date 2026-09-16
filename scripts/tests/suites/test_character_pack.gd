@@ -19,6 +19,7 @@ func run(r) -> void:
 	await _test_rejects_invalid_manifest_schema(r)
 	await _test_rejects_unsafe_paths(r)
 	await _test_rejects_disallowed_extension(r)
+	await _test_orphaned_voice_event_key_is_imported_without_error(r)
 
 
 func _make_test_profile(r, suffix: String) -> CharacterProfile:
@@ -131,3 +132,47 @@ func _test_rejects_disallowed_extension(r) -> void:
 	})
 	var result := await CharacterLibrary.import_pack(zip_bytes)
 	r.expect_true("화이트리스트에 없는 확장자가 있으면 거부함", not result["ok"])
+
+
+## 야추 포기(yacht.zero) 보이스를 편집 화면/재생 대상에서 뺀 뒤에도, 예전에
+## 만들어진 캐릭터 팩의 manifest.json에는 그 매핑이 그대로 남아있을 수 있다.
+## 더 이상 존재하지 않는 이벤트 키를 만나도 에러 없이 조용히 무시해야
+## 한다(원칙 6 - 신뢰하지 않는 외부 입력이라도 알 수 없는 필드 하나로
+## 전체를 거부하면 안 됨). CharacterProfile._sanitize_voice_map()이 애초에
+## 키 목록을 VOICE_EVENTS와 대조하지 않고 그대로 통과시키므로 가져오기
+## 자체는 문제없이 성공해야 하고, 그 매핑이 가리키는 파일도 "고아 파일
+## 정리" 때 잘못 지워지면 안 된다(_referenced_files()는 이벤트 종류와
+## 무관하게 voice_map을 통째로 훑으므로 정상적으로 보존돼야 함).
+func _test_orphaned_voice_event_key_is_imported_without_error(r) -> void:
+	var manifest := JSON.stringify({
+		"format_version": CharacterProfile.FORMAT_VERSION,
+		"id": "whatever",
+		"display_name": "옛날 캐릭터",
+		"portrait_file": "",
+		"thumbnail_file": "",
+		"voice_map": {
+			"yacht.zero": ["voices/give_up.wav"],
+			"yacht.yacht": ["voices/yacht.wav"],
+		},
+		"volume_db": 0.0,
+	})
+	var zip_bytes := _zip_bytes_from_entries({
+		"manifest.json": manifest,
+		"voices/give_up.wav": PackedByteArray([1, 2, 3]),
+		"voices/yacht.wav": PackedByteArray([4, 5, 6]),
+	})
+
+	var result := await CharacterLibrary.import_pack(zip_bytes)
+	r.expect_true("더 이상 없는 이벤트 키(yacht.zero)가 있어도 에러 없이 가져와짐", result["ok"])
+	if not result["ok"]:
+		return
+
+	var imported: CharacterProfile = result["profile"]
+	r.expect_true("고아 매핑(yacht.zero)이 조용히 보존됨(재생만 안 될 뿐 데이터는 안 지워짐)", imported.voice_map.has("yacht.zero"))
+	r.expect_true("여전히 유효한 매핑(yacht.yacht)도 정상 보존됨", imported.voice_map.has("yacht.yacht"))
+
+	CharacterLibrary.save_profile(imported)
+	var zero_voice_path := CharacterLibrary.CHARACTERS_DIR.path_join(imported.id).path_join(imported.voice_map["yacht.zero"][0])
+	r.expect_true("save_profile()의 고아 파일 정리가 yacht.zero 보이스 파일을 안 지움", FileAccess.file_exists(zero_voice_path))
+
+	CharacterLibrary.delete(imported.id)

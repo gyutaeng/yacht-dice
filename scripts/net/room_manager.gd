@@ -154,9 +154,13 @@ func remove_peer(peer_id: int, voluntary: bool = true, now_msec: int = 0) -> Dic
 func force_vacate_slot(room: Room, slot_index: int) -> void:
 	if slot_index < 0 or slot_index >= room.slots.size():
 		return
-	var slot: Dictionary = room.slots[slot_index]
-	if slot == null:
+	# null을 그대로 Dictionary 타입 변수에 대입하면 그 자리에서 런타임
+	# 에러가 나서 바로 다음 줄의 null 검사가 무의미해진다(server_main.gd의
+	# _service_rematch_rooms에서 실제로 겪은 함정과 같음) - 원본 배열
+	# 원소를 먼저 검사한다.
+	if room.slots[slot_index] == null:
 		return
+	var slot: Dictionary = room.slots[slot_index]
 	var peer_id: int = slot["peer_id"]
 	room.vacate_slot(slot_index)
 	if peer_id != -1:
