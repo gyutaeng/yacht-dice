@@ -66,11 +66,44 @@ Godot 4.7 / GDScript로 만드는 요트다이스 보드게임. 플레이어가 
   크래시는 **양방향** 팩 전송이었는데 이 경로가 아직 미검증이라, 2-7
   착수 전에 이 경로로 한 번 더(한 세션 한도) 재현을 시도하기로
   확정했다 - `docs/deployment_checklist.md` "2-7 사전 조사 §6" 참고.
-- **남은 것**: 양방향 재현 시도(사용자) → **2-7**(서버 상시 배포 -
-  계획 확정됨, `docs/deployment_checklist.md` "2-7 사전 조사 §6"의
-  확정된 순서대로 진행 중 - PORT 환경변수 처리는 완료, Docker/GitHub
-  CLI 설치가 없어 저장소 생성/Dockerfile 로컬 실행이 막혀 있음), **Phase
-  3**(웹 퍼블리싱 마감 - `docs/deployment_checklist.md`/`docs/web_verification_checklist.md`
+  **아직 사용자가 이 재현을 진행하지 않은 상태로 2-7 인프라 작업을
+  먼저 시작했다** - 정식 순서는 재현이 먼저지만, 인프라 준비(계정/도구
+  설치, 저장소, Dockerfile)는 크래시 여부와 무관하게 필요한 작업이라
+  병행했다. **Render에 실제로 서비스를 만들어 띄우기 전에는 반드시
+  이 재현을 마칠 것.**
+
+### 🔵 2-7(Render 배포) 진행 상황 - 다음 세션은 여기서 이어서 시작
+확정된 순서는 `docs/deployment_checklist.md` "2-7 사전 조사 §6"에 있다.
+2026-09-17 세션에서 여기까지 진행하고 멈췄다(사용자 요청 - 다음날 이어감).
+
+- ✅ **단계 0(비공개 저장소)**: `https://github.com/gyutaeng/yacht-dice`
+  (private) 생성 완료, `origin`으로 연결, `main`을 Render 배포 기준으로
+  확정하고 push 완료. `gh` CLI 설치·인증도 완료(계정 gyutaeng).
+- ✅ **단계 1(PORT 환경변수)**: `server_main.gd::_resolve_port()`
+  우선순위를 "CLI 인자 → `PORT` → `YACHT_DICE_PORT` → 8910"으로 완료,
+  회귀 테스트 4개 통과.
+- ⬜ **단계 2(양방향 크래시 재현)**: **아직 사용자가 안 함.** 다음
+  세션에서 이걸 먼저 할지, 인프라를 계속 준비할지 확인할 것.
+- ✅ **단계 3(Dockerfile)**: 로컬 `docker build`+`docker run`까지 확인
+  완료. Docker Desktop 자체가 이 컴퓨터에 없어서 WSL2 설치(`wsl --install`
+  + 재부팅) → Docker Desktop 재실행까지 거쳤다(둘 다 완료됨 - 다음
+  세션엔 이 설치가 그대로 남아있을 것이므로 재설치 불필요).
+- 🟡 **단계 4(바인딩/헬스체크)**: 바인딩은 확인 완료(`"*"` 기본값이
+  이미 0.0.0.0 요구사항 충족). **헬스 체크는 로컬에서 확인 불가능한
+  부분이라 미확인으로 남음** - Render가 TCP 개방만 보는지 HTTP 200을
+  요구하는지는 실제 배포(단계 5)에서만 드러난다.
+- ⬜ **단계 5(Render 서비스 생성) - 다음 세션의 시작점.** Render 계정이
+  있는지부터 물어봐야 한다(이전 세션에서 아직 답 못 받음). 계정이
+  있으면: New → Web Service → 저장소(`gyutaeng/yacht-dice`, private라
+  Render의 GitHub 앱 권한 부여 필요) → Environment: Docker → Free 플랜.
+  **아직 실제로 만들지는 않았다.** 화면에 보이는 Health Check Path
+  설정 항목을 사용자에게 캡처/전달받아서, 단계 4에서 못 채운 헬스체크
+  방식을 여기서 판단할 것.
+- ⬜ 단계 6(연결 유지 시간 실측, go/no-go 분기점), 7(재시작 안내 문구),
+  8(접속 주소 자동 분기), 9(재빌드+Pages 재배포), 10(전체 재검증)은
+  아직 손 안 댐.
+- **남은 것**: 위 2-7 이어서 진행 → **Phase 3**(웹 퍼블리싱 마감 -
+  `docs/deployment_checklist.md`/`docs/web_verification_checklist.md`
   체크리스트 완주).
 
 ### ⚠️ 진행 중/보류/제약 - 다음 세션이 바로 알아야 할 것
