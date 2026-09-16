@@ -85,6 +85,18 @@ func leave_game() -> void:
 	_client.leave()
 
 
+## 2-4의 "리모컨" 구조 유지(사용자 지적) - 게임 종료 화면이 직접 온라인
+## 여부를 몰라도 되도록, "이 화면에서 가능한 행동"을 여기서 정해서
+## 넘겨준다. 온라인은 2-6B의 같은 방 재대전("한 판 더" - 전원이 눌러야
+## 다음 판이 시작됨)과, 나가면 남은 사람에게 알려지는 "나가기"(leave_game()이
+## 그대로 처리) 둘이다.
+func get_game_over_actions() -> Array:
+	return [
+		{"id": "rematch", "label": "한 판 더"},
+		{"id": "leave", "label": "나가기"},
+	]
+
+
 func _on_state_snapshot_received(snapshot: Dictionary) -> void:
 	_request_pending = false
 	game_state.apply_snapshot(snapshot)

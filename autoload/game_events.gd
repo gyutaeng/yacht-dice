@@ -58,59 +58,84 @@ const Yacht := {
 # 시그널 자체와 이벤트 릴레이는 그대로 남아있지만(나중에 다시 쓸 수도 있음),
 # 캐릭터 보이스로는 더 이상 반응하지 않는다(1-4B에서 yacht.roll/hold 등을
 # 뺐을 때와 같은 방식 - 시그널은 살아있어도 이 표에는 없는 것들).
+#
+# "recommended_label"/"recommended_max_sec"(사용자 요청) - CharacterLimits의
+# VOICE_MAX_DURATION_SEC(7초)는 "이 이상은 무조건 거부"하는 기술적 상한일
+# 뿐이고, 실제로 적당한 길이는 이벤트마다 크게 다르다. "내 차례"에 7초짜리를
+# 넣으면 규칙은 통과하지만 4인 게임에서 48번 나와서 못 견딘다 - 그래서
+# 이벤트별 권장 길이를 따로 둔다. recommended_max_sec을 넘어도 저장은
+# 허용한다(거부가 아니라 안내만, 1-6 편집 화면이 노란색으로 표시).
 const VOICE_EVENTS := [
 	{
 		"key": Common.GAME_START,
 		"label": "게임 시작 인사",
 		"description": "게임이 시작되고 첫 턴이 시작되기 전, 한 판에 한 번만 재생됩니다.",
 		"frequency": "once",
+		"recommended_label": "권장 5초 이내",
+		"recommended_max_sec": 5.0,
 	},
 	{
 		"key": Common.TURN_START,
 		"label": "내 차례",
 		"description": "자기 차례가 되었을 때 재생됩니다.",
 		"frequency": "frequent",
+		"recommended_label": "권장 1~2초",
+		"recommended_max_sec": 2.0,
 	},
 	{
 		"key": Common.WIN,
 		"label": "승리",
 		"description": "게임에서 1등으로 이겼을 때 재생됩니다.",
 		"frequency": "once",
+		"recommended_label": "권장 7초 이내",
+		"recommended_max_sec": 7.0,
 	},
 	{
 		"key": Common.LOSE,
 		"label": "패배",
 		"description": "게임에서 최하위 점수로 졌을 때 재생됩니다.",
 		"frequency": "once",
+		"recommended_label": "권장 7초 이내",
+		"recommended_max_sec": 7.0,
 	},
 	{
 		"key": Yacht.YACHT,
 		"label": "야추",
 		"description": "주사위를 굴려 야추(같은 눈 5개)가 나왔을 때 재생됩니다.",
 		"frequency": "frequent",
+		"recommended_label": "권장 3~4초",
+		"recommended_max_sec": 4.0,
 	},
 	{
 		"key": Yacht.LARGE_STRAIGHT,
 		"label": "라지 스트레이트",
 		"description": "주사위를 굴려 라지 스트레이트가 나왔을 때 재생됩니다.",
 		"frequency": "frequent",
+		"recommended_label": "권장 3~4초",
+		"recommended_max_sec": 4.0,
 	},
 	{
 		"key": Yacht.FULL_HOUSE,
 		"label": "풀 하우스",
 		"description": "주사위를 굴려 풀 하우스가 나왔을 때 재생됩니다.",
 		"frequency": "frequent",
+		"recommended_label": "권장 2~3초",
+		"recommended_max_sec": 3.0,
 	},
 	{
 		"key": Yacht.FOUR_OF_A_KIND,
 		"label": "포 카드",
 		"description": "주사위를 굴려 포 카드(같은 눈 4개 이상)가 나왔을 때 재생됩니다.",
 		"frequency": "frequent",
+		"recommended_label": "권장 2~3초",
+		"recommended_max_sec": 3.0,
 	},
 	{
 		"key": Yacht.BONUS,
 		"label": "상단 보너스",
 		"description": "상단 섹션 합계 63점을 넘겨 보너스를 처음 달성했을 때 재생됩니다.",
 		"frequency": "once",
+		"recommended_label": "권장 3~4초",
+		"recommended_max_sec": 4.0,
 	},
 ]

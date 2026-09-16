@@ -37,3 +37,14 @@ func is_request_pending() -> bool:
 
 func leave_game() -> void:
 	pass  # 나갈 서버가 없다.
+
+
+## 2-4의 "리모컨" 구조 유지(사용자 지적) - 게임 종료 화면이 로컬/온라인을
+## 직접 구분하지 않도록, "이 화면에서 가능한 행동"을 컨트롤러가 정해서
+## 넘겨준다. 로컬은 재대전(같은 방 개념)이 없으므로 바로 다시 시작하는
+## "다시 하기"와 타이틀로 돌아가는 "처음으로" 둘뿐이다.
+func get_game_over_actions() -> Array:
+	return [
+		{"id": "restart", "label": "다시 하기"},
+		{"id": "leave", "label": "처음으로"},
+	]

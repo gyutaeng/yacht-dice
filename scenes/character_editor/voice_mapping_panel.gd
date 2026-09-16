@@ -92,6 +92,15 @@ func _build_event_row(event: Dictionary) -> Control:
 	freq_tag.add_theme_font_size_override("font_size", 12)
 	freq_tag.modulate = Color(0.6, 0.8, 1.0) if is_once else Color(1.0, 0.8, 0.4)
 	header.add_child(freq_tag)
+
+	# 사용자 요청 - 7초는 그냥 거부선일 뿐이고, 실제 적정 길이는 이벤트마다
+	# 크게 다르다("내 차례"에 7초짜리를 넣으면 규칙은 통과해도 4인 게임에서
+	# 48번 나와 못 견딤). 거부는 안 한다 - 그냥 참고용 안내.
+	var recommended_tag := Label.new()
+	recommended_tag.text = str(event.get("recommended_label", ""))
+	recommended_tag.add_theme_font_size_override("font_size", 12)
+	recommended_tag.modulate = Color(1, 1, 1, 0.5)
+	header.add_child(recommended_tag)
 	vbox.add_child(header)
 
 	var desc := Label.new()
@@ -109,8 +118,9 @@ func _build_event_row(event: Dictionary) -> Control:
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 		vbox.add_child(hint)
 
+	var recommended_max_sec: float = float(event.get("recommended_max_sec", 0.0))
 	for filename in files:
-		vbox.add_child(_build_file_row(event.key, filename))
+		vbox.add_child(_build_file_row(event.key, filename, recommended_max_sec))
 
 	var add_button := Button.new()
 	add_button.text = "파일 추가"
@@ -122,7 +132,10 @@ func _build_event_row(event: Dictionary) -> Control:
 	return panel
 
 
-func _build_file_row(event_key: String, filename: String) -> Control:
+## recommended_max_sec(사용자 요청) - 7초 거부선과 별개로 이벤트별 권장
+## 길이를 넘으면(거부는 아님) 용량 표시(CharacterLimits.total_size_color)와
+## 같은 노란색으로 눈에 띄게 한다. 0이면(권장값 없음) 검사를 건너뛴다.
+func _build_file_row(event_key: String, filename: String, recommended_max_sec: float = 0.0) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 
@@ -130,6 +143,14 @@ func _build_file_row(event_key: String, filename: String) -> Control:
 	name_label.text = filename.get_file()
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.clip_text = true
+
+	var stream := CharacterLibrary.load_profile_audio(_profile, filename)
+	if stream != null:
+		var length_sec := stream.get_length()
+		name_label.text = "%s (%.1f초)" % [filename.get_file(), length_sec]
+		if recommended_max_sec > 0.0 and length_sec > recommended_max_sec:
+			name_label.modulate = Color(1.0, 0.85, 0.3)  # CharacterLimits.total_size_color()의 "권장 초과" 색과 동일.
+			name_label.tooltip_text = "권장 길이(%.0f초)를 넘었습니다. 재생 시간이 길면 다른 이벤트의 보이스를 밀어낼 수 있어요." % recommended_max_sec
 	row.add_child(name_label)
 
 	var play_button := Button.new()
@@ -217,11 +238,12 @@ func _on_files_picked(files: Array) -> void:
 				file_name, CharacterLimitsScript.format_bytes(bytes.size()), CharacterLimitsScript.format_bytes(AssetLoader.MAX_AUDIO_BYTES)
 			])
 			continue
-		if AssetLoader.load_audio_from_bytes(bytes) == null:
+		var decoded_stream: AudioStream = AssetLoader.load_audio_from_bytes(bytes)
+		if decoded_stream == null:
 			messages.append("%s: 열 수 없습니다 - 지원하지 않는 형식이거나 파일이 손상되었을 수 있습니다." % file_name)
 			continue
 
-		var check := CharacterLimitsScript.check_voice(bytes.size(), file_name)
+		var check := CharacterLimitsScript.check_voice(bytes.size(), file_name, decoded_stream.get_length())
 		if not check["ok"]:
 			messages.append("%s: %s" % [file_name, check["message"]])
 			continue

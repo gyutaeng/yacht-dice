@@ -30,11 +30,15 @@ func _test_voice_events_table(r) -> void:
 
 	var seen_keys := {}
 	var all_have_label_and_description := true
+	var all_have_recommended_length := true
 	for entry in GameEvents.VOICE_EVENTS:
 		seen_keys[entry.key] = true
 		if entry.label == "" or entry.description == "":
 			all_have_label_and_description = false
+		if str(entry.get("recommended_label", "")) == "" or float(entry.get("recommended_max_sec", 0.0)) <= 0.0:
+			all_have_recommended_length = false
 	r.expect_true("모든 항목에 한국어 라벨/설명이 비어있지 않게 채워져 있음", all_have_label_and_description)
+	r.expect_true("모든 항목에 권장 길이(사용자 요청)가 채워져 있음", all_have_recommended_length)
 
 	var expected_keys := [
 		GameEvents.Common.GAME_START, GameEvents.Common.TURN_START,

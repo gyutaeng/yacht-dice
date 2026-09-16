@@ -369,26 +369,14 @@ text = "게임 종료!"
 horizontal_alignment = 1
 autowrap_mode = 2
 
+[node name="GameOverResultsList" type="VBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
 [node name="GameOverButtonsRow" type="HBoxContainer" parent="GameOverOverlay/CenterContainer/Panel/VBox" unique_id=1264757333]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
-
-[node name="RestartButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow" unique_id=452803229]
-custom_minimum_size = Vector2(140, 44)
-layout_mode = 2
-text = "다시 하기"
-
-[node name="RematchButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow"]
-visible = false
-custom_minimum_size = Vector2(140, 44)
-layout_mode = 2
-text = "한 판 더"
-
-[node name="ToTitleButton" type="Button" parent="GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow" unique_id=643518459]
-custom_minimum_size = Vector2(140, 44)
-layout_mode = 2
-text = "처음으로"
 
 [node name="DebugInitLog" type="RichTextLabel" parent="." unique_id=1529651542]
 modulate = Color(1, 1, 1, 0.85)

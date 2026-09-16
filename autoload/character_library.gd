@@ -475,7 +475,11 @@ func _pack_size_advisory(profile: CharacterProfile, extracted: Dictionary) -> St
 			if not extracted.has(filename):
 				continue
 			var bytes: PackedByteArray = extracted[filename]
-			var check := CharacterLimitsScript.check_voice(bytes.size(), filename)
+			var duration_sec := 0.0
+			var stream := AssetLoader.load_audio_from_bytes(bytes)
+			if stream != null:
+				duration_sec = stream.get_length()
+			var check := CharacterLimitsScript.check_voice(bytes.size(), filename, duration_sec)
 			if not check["ok"]:
 				issues.append("보이스(%s) - %s" % [filename.get_file(), check["message"]])
 

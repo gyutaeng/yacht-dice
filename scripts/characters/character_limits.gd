@@ -22,6 +22,17 @@ const THUMBNAIL_MAX_BYTES := 1 * 1024 * 1024
 
 const VOICE_MAX_BYTES := 1 * 1024 * 1024
 
+# 용량과 별개인 제한이다(사용자 지적) - WAV는 1MB면 대략 11초라 용량
+# 제한이 우연히 길이도 같이 막아주지만, 우리가 권장하는 OGG는 1MB에
+# 1~2분이 들어가서 용량만으로는 긴 대사를 못 막는다. 길이 자체가
+# 문제인 이유는 1-4C의 보이스 대기열(VOICE_WAIT_TIMEOUT_MSEC, 1.5초) -
+# 대사 하나가 길게 재생되는 동안 그 사이에 일어난 다른 이벤트(야추,
+# 보너스, 상대 차례 등)의 보이스 요청이 대기열에서 조용히 밀려나거나
+# 버려진다. 런타임에 오디오를 잘라낼 수는 없으므로(1-7B와 같은 원칙 -
+# 자동 변환이 불가능한 제약은 거부하고 안내만 한다) 업로드 시점에
+# 거부한다.
+const VOICE_MAX_DURATION_SEC := 7.0
+
 # 캐릭터 전체(초상+썸네일+보이스 전부 합계) 상한. RECOMMENDED를 넘으면 노란색
 # 경고, WARNING을 넘으면 빨간색 경고 - 다만 이 둘은 저장 자체를 막지 않는다
 # (개별 파일 상한과 달리 "권장"일 뿐이다).
@@ -70,15 +81,24 @@ static func check_image(width: int, height: int, byte_size: int, kind: String) -
 	return {"ok": false, "message": message, "can_auto_resize": dimension_exceeded}
 
 
-## 보이스 파일 하나를 검사한다. 반환: {"ok": bool, "message": String(ok=false일
-## 때만), "advisory": String(한도 안에 들어와도 WAV라서 권고할 게 있으면 채워짐,
-## 없으면 "")}. advisory는 거부가 아니라 "그냥 알려주는 것"이라 ok=true여도 같이 온다.
-static func check_voice(byte_size: int, file_name: String) -> Dictionary:
+## 보이스 파일 하나를 검사한다. duration_sec은 AudioStream.get_length()로 잰
+## 실제 재생 길이(초) - wav/ogg/mp3 전부에서 정확히 동작함을 실측 확인함.
+## 반환: {"ok": bool, "message": String(ok=false일 때만), "advisory": String(한도
+## 안에 들어와도 WAV라서 권고할 게 있으면 채워짐, 없으면 "")}. advisory는
+## 거부가 아니라 "그냥 알려주는 것"이라 ok=true여도 같이 온다.
+static func check_voice(byte_size: int, file_name: String, duration_sec: float) -> Dictionary:
 	if byte_size > VOICE_MAX_BYTES:
 		var message := (
 			"이 파일은 %s입니다. 보이스 하나는 %s까지 넣을 수 있어요. "
 			+ "WAV는 압축이 없어서 큽니다. OGG나 MP3로 변환하면 보통 10배 작아집니다."
 		) % [format_bytes(byte_size), format_bytes(VOICE_MAX_BYTES)]
+		return {"ok": false, "message": message, "advisory": ""}
+
+	if duration_sec > VOICE_MAX_DURATION_SEC:
+		var message := (
+			"이 파일은 %.1f초입니다. 보이스 하나는 %.0f초까지 넣을 수 있어요. "
+			+ "오디오 편집 프로그램에서 잘라서 다시 올려주세요."
+		) % [duration_sec, VOICE_MAX_DURATION_SEC]
 		return {"ok": false, "message": message, "advisory": ""}
 
 	return {"ok": true, "message": "", "advisory": _wav_advisory(file_name)}

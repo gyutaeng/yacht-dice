@@ -22,6 +22,8 @@ func run(r) -> void:
 	_test_check_voice_wav_gets_advisory(r)
 	_test_check_voice_non_wav_no_advisory(r)
 	_test_check_voice_exceeds_limit(r)
+	_test_check_voice_exceeds_duration_limit(r)
+	_test_check_voice_exactly_at_duration_limit_passes(r)
 	_test_compute_pack_size(r)
 	await _test_import_warns_on_oversized_portrait(r)
 
@@ -69,23 +71,37 @@ func _test_check_image_bytes_exceeded_blocks_without_resize(r) -> void:
 
 
 func _test_check_voice_within_limit(r) -> void:
-	var check := CharacterLimits.check_voice(512 * 1024, "laugh.ogg")
+	var check := CharacterLimits.check_voice(512 * 1024, "laugh.ogg", 3.0)
 	r.expect_true("한도 안이면 통과", check["ok"])
 
 
 func _test_check_voice_wav_gets_advisory(r) -> void:
-	var check := CharacterLimits.check_voice(512 * 1024, "laugh.wav")
+	var check := CharacterLimits.check_voice(512 * 1024, "laugh.wav", 3.0)
 	r.expect_true("WAV는 한도 안이어도 권고 문구가 붙음", check["advisory"] != "")
 
 
 func _test_check_voice_non_wav_no_advisory(r) -> void:
-	var check := CharacterLimits.check_voice(512 * 1024, "laugh.ogg")
+	var check := CharacterLimits.check_voice(512 * 1024, "laugh.ogg", 3.0)
 	r.expect_eq("OGG는 권고 문구 없음", check["advisory"], "")
 
 
 func _test_check_voice_exceeds_limit(r) -> void:
-	var check := CharacterLimits.check_voice(2 * 1024 * 1024, "laugh.wav")
+	var check := CharacterLimits.check_voice(2 * 1024 * 1024, "laugh.wav", 3.0)
 	r.expect_true("용량 초과면 거부됨", not check["ok"])
+
+
+## 사용자 요청 - 용량(1MB)과 길이(7초)는 서로 다른 제한이다. OGG는 1MB에
+## 1~2분이 들어가서 용량 검사만으로는 긴 대사를 못 거른다.
+func _test_check_voice_exceeds_duration_limit(r) -> void:
+	var check := CharacterLimits.check_voice(200 * 1024, "long.ogg", 18.3)
+	r.expect_true("용량은 작아도 길이가 넘으면 거부됨", not check["ok"])
+	r.expect_true("메시지에 실제 길이가 들어감", check["message"].contains("18.3"))
+	r.expect_true("메시지에 한도가 들어감", check["message"].contains("7"))
+
+
+func _test_check_voice_exactly_at_duration_limit_passes(r) -> void:
+	var check := CharacterLimits.check_voice(200 * 1024, "ok.ogg", CharacterLimits.VOICE_MAX_DURATION_SEC)
+	r.expect_true("정확히 한도면 통과(초과가 아니라 같음)", check["ok"])
 
 
 func _test_compute_pack_size(r) -> void:

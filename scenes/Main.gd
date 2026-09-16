@@ -16,6 +16,13 @@ const BOLD_FONT_PATH := "res://assets/fonts/Pretendard-Bold.otf"
 const SPECIAL_HAND_DISPLAY_DURATION := 1.5
 const SPECIAL_HAND_FADE_DURATION := 0.15
 
+# 게임 결과 화면(사용자 요청) - 캡처해서 공유될 가능성이 높은 화면이라 썸네일을
+# 크게 뒀다(48px는 얼굴을 알아보기 어려움). 96px로 재보니 4인 기준 결과 패널
+# 전체 높이가 653px까지 나와서(test_game_over_ui.gd로 실측) 작은 창에서
+# 여유가 부족했다 - 80px로 낮춰서 589px로 줄였다(2~4인 세로 목록이라 가로
+# 폭은 애초에 문제 없음). 더 줄여야 하면 이 상수 하나만 바꾸면 된다.
+const RESULT_THUMBNAIL_SIZE := 80.0
+
 var game_state: GameState
 
 # "리모컨" 패턴(2-4) - 화면은 로컬을 조종하는지 서버에 요청을 보내는지
@@ -74,6 +81,12 @@ var connection_status_labels: Array[Label] = []
 # player_index -> true, "확정 이탈"(reason="timeout")로 통보받은 슬롯.
 # 하나라도 있으면 [로비로 나가기] 버튼을 보여준다(2-6).
 var _departed_player_indices: Dictionary = {}
+
+# 게임 결과 화면(썸네일 목록 + 버튼)은 game_over가 된 뒤 딱 한 번만 만들면
+# 된다 - 순위/점수는 게임이 끝나는 순간 확정되므로 이후 state_changed가
+# 더 와도 다시 만들 필요가 없다(_build_scoreboard()를 한 번만 부르는 것과
+# 같은 이유).
+var _game_over_ui_built: bool = false
 # 2-6 - 온라인 게임 중인 GameClient. player_left/player_reconnected/
 # player_timer를 직접 구독하기 위해 들고 있는다(online_screen이 이미
 # _client를 갖고 있지만, 게임 화면에서 벌어지는 일이라 Main.gd가 직접
@@ -145,9 +158,8 @@ var _greeting_active: bool = false
 @onready var game_over_overlay: Control = $GameOverOverlay
 @onready var game_over_panel: PanelContainer = $GameOverOverlay/CenterContainer/Panel
 @onready var game_over_label: Label = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverLabel
-@onready var restart_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/RestartButton
-@onready var rematch_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/RematchButton
-@onready var to_title_button: Button = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow/ToTitleButton
+@onready var game_over_results_list: VBoxContainer = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverResultsList
+@onready var game_over_buttons_row: HBoxContainer = $GameOverOverlay/CenterContainer/Panel/VBox/GameOverButtonsRow
 
 @onready var quit_confirm_dialog: ConfirmationDialog = $QuitConfirmDialog
 
@@ -264,9 +276,6 @@ func _ready() -> void:
 	roll_button.pressed.connect(_on_roll_button_pressed)
 	confirm_score_button.pressed.connect(_on_confirm_score_pressed)
 	quick_progress_button.pressed.connect(_on_quick_progress_button_pressed)
-	restart_button.pressed.connect(_on_restart_pressed)
-	rematch_button.pressed.connect(_on_rematch_button_pressed)
-	to_title_button.pressed.connect(_on_to_title_pressed)
 	quit_confirm_dialog.confirmed.connect(_return_to_title)
 
 	# GameEvents는 앱이 사는 동안 계속 살아있는 autoload라서, game_state처럼
@@ -446,11 +455,13 @@ func _on_online_character_select_requested() -> void:
 	_show_screen(Screen.CHARACTER_SELECT)
 
 
-## 2-6B(같은 방에서 재대전) - 게임 종료 화면의 [한 판 더]. 로비의 [캐릭터
+## 2-6B(같은 방에서 재대전) - 게임 종료 화면의 [한 판 더](2-4의 "리모컨"
+## 구조 유지를 위해 이제 컨트롤러의 get_game_over_actions()가 내놓는 "rematch"
+## 액션에서 호출된다 - 화면이 직접 온라인 여부를 몰라도 됨). 로비의 [캐릭터
 ## 선택]과 완전히 같은 화면 흐름을 타되(2-4B 재사용, 새 로직 없음),
 ## 확정 시점에 "이미 방 안이니 바로 전송+준비까지 자동으로 보낸다"만
 ## 다르다 - 그 구분을 _character_select_for_rematch로 표시해둔다.
-func _on_rematch_button_pressed() -> void:
+func _start_rematch_flow() -> void:
 	_character_select_for_rematch = true
 	_on_online_character_select_requested()
 
@@ -488,12 +499,18 @@ func _on_manage_characters_pressed() -> void:
 	add_child(editor_instance)
 
 
-func _on_restart_pressed() -> void:
-	_start_new_game(player_character_assignments.duplicate())
-
-
-func _on_to_title_pressed() -> void:
-	_return_to_title()
+## 2-4의 "리모컨" 구조 유지(사용자 지적) - 게임 종료 화면은 자기가 로컬인지
+## 온라인인지 몰라야 한다. 컨트롤러의 get_game_over_actions()가 내놓는 액션
+## id 하나만 받아서 실행할 뿐, "온라인이면 이 버튼" 같은 분기가 여기 없다 -
+## 그 판단(어떤 행동이 가능한지)은 이미 컨트롤러 쪽에서 끝난 상태로 넘어온다.
+func _on_game_over_action_pressed(action_id: String) -> void:
+	match action_id:
+		"restart":
+			_start_new_game(player_character_assignments.duplicate())
+		"rematch":
+			_start_rematch_flow()
+		"leave":
+			_return_to_title()
 
 
 func _return_to_title() -> void:
@@ -592,13 +609,15 @@ func _disconnect_online_client_signals() -> void:
 ## 2-6(§6 "화면 표시") - 다른 플레이어의 연결 상태를 그 사람 칸 밑에
 ## 지속적으로 표시한다("한 번 뜨고 사라지는 토스트가 아니라 계속 붙어
 ## 있는 형태"). reason="disconnected"는 재접속 유예 중(약하게 표시),
-## "timeout"은 확정 이탈(자동 진행 중이라고 계속 표시 + [로비로 나가기]
-## 노출).
+## "timeout"(확정 이탈)과 "left"(명시적 나가기)는 둘 다 그 순간부터 서버가
+## 대신 즉시 자동 진행하는 게 똑같으므로 같은 취급이다(자동 진행 중이라고
+## 계속 표시 + [로비로 나가기] 노출 + 게임 결과 화면에 "(나감)" 표시 -
+## _departed_player_indices를 게임 결과 화면도 그대로 읽는다).
 func _on_online_player_left(player_index: int, reason: String) -> void:
 	if player_index < 0 or player_index >= connection_status_labels.size():
 		return
 	var label := connection_status_labels[player_index]
-	if reason == "timeout":
+	if reason == "timeout" or reason == "left":
 		label.text = "나갔습니다 (자동 진행 중)"
 		label.visible = true
 		_departed_player_indices[player_index] = true
@@ -728,6 +747,14 @@ func _clear_dynamic_nodes() -> void:
 	turn_countdown_label.visible = false
 	quick_progress_button.visible = false
 	_quick_progress_running = false
+
+	for child in game_over_results_list.get_children():
+		game_over_results_list.remove_child(child)
+		child.queue_free()
+	for child in game_over_buttons_row.get_children():
+		game_over_buttons_row.remove_child(child)
+		child.queue_free()
+	_game_over_ui_built = false
 
 
 ## 내 턴인지 확인한다(로컬은 항상 true - 전원이 한 화면을 같이 쓰므로
@@ -1175,43 +1202,132 @@ func _refresh_game_over_ui() -> void:
 		for button in player_buttons:
 			button.visible = false
 
-	var winners := game_state.get_winners()
-	var result_text: String
-	if winners.size() == 1:
-		result_text = "플레이어 %d 승리" % (winners[0] + 1)
-	elif winners.size() == game_state.player_count:
-		result_text = "무승부"
-	else:
-		var names: Array[String] = []
-		for w in winners:
-			names.append("플레이어 %d" % (w + 1))
-		result_text = "공동 우승: %s" % ", ".join(names)
-
-	game_over_label.text = "게임 종료!\n%s\n%s" % [result_text, _build_score_summary_text()]
 	game_over_overlay.visible = true
 
-	# 로컬은 "다시 하기"(바로 새 판), 온라인은 2-6B의 "한 판 더"(같은
-	# 방에서 재대전 - 전원이 눌러야 시작됨)를 쓴다. "타이틀로"/"나가기"는
-	# 항상 둘 다에서 보인다.
-	restart_button.visible = (my_player_index == -1)
-	rematch_button.visible = (my_player_index != -1)
+	# 순위/점수/캐릭터는 게임이 끝나는 순간 이미 확정이라(그 이후로는 아무도
+	# 점수를 못 바꿈), 딱 한 번만 만든다 - state_changed가 그 뒤에 더 와도
+	# (예: 2-6 재접속 알림) 다시 만들 필요가 없다.
+	if _game_over_ui_built:
+		return
+	_game_over_ui_built = true
+
+	_build_game_over_results_list()
+	_rebuild_game_over_buttons()
 
 
-func _build_score_summary_text() -> String:
-	# 플레이어 1,2 / (줄바꿈) / 3,4 처럼 두 명씩 묶어서 어색한 위치에서
-	# autowrap이 끊기지 않고 항상 깔끔한 지점에서 줄이 바뀌게 한다.
-	var entries: Array[String] = []
+## 점수 내림차순 "1224" 순위(동점은 같은 순위, 다음 순위는 인원수만큼 건너뜀 -
+## 예: 공동 1위 두 명이면 다음은 3위)를 계산한다. Array[{"player", "score", "rank"}].
+func _compute_game_over_rankings() -> Array:
+	var scored: Array = []
 	for p in game_state.player_count:
-		entries.append("플레이어 %d: %d점" % [p + 1, game_state.get_player_total(p)])
+		scored.append({"player": p, "score": game_state.get_player_total(p)})
+	scored.sort_custom(func(a, b): return a["score"] > b["score"])
 
-	var lines: Array[String] = []
-	var pair: Array[String] = []
-	for entry in entries:
-		pair.append(entry)
-		if pair.size() == 2:
-			lines.append(" / ".join(pair))
-			pair.clear()
-	if not pair.is_empty():
-		lines.append(" / ".join(pair))
+	var rankings: Array = []
+	for i in scored.size():
+		var rank: int = i + 1
+		if i > 0 and scored[i]["score"] == scored[i - 1]["score"]:
+			rank = rankings[i - 1]["rank"]
+		rankings.append({"player": scored[i]["player"], "score": scored[i]["score"], "rank": rank})
+	return rankings
 
-	return "\n".join(lines)
+
+## 캡처되어 공유될 가능성이 높은 화면이라(사용자 지적) 이름/점수만 있던
+## 텍스트 요약을 캐릭터 썸네일이 들어간 목록으로 완전히 대체한다. 2-6으로
+## 게임 도중 나간 사람이 생길 수 있으므로(사용자 지적) 그 사람도 점수 그대로
+## 목록에 나오고 이름 옆에 "(나감)"만 붙는다 - 썸네일도 그대로 보여준다
+## (이미 받아둔 팩이 user://cache/received/에 있어 로컬/온라인 차이가 없다).
+func _build_game_over_results_list() -> void:
+	for child in game_over_results_list.get_children():
+		game_over_results_list.remove_child(child)
+		child.queue_free()
+
+	var winners := game_state.get_winners()
+	for entry in _compute_game_over_rankings():
+		var player_index: int = entry["player"]
+		var is_winner := winners.has(player_index)
+		game_over_results_list.add_child(_build_game_over_result_row(player_index, entry["rank"], entry["score"], is_winner))
+
+
+## 썸네일은 1-3의 CharacterPortrait/TextureFit(초상 실루엣 폴백이 이미 있는
+## 그 유틸)을 그대로 재사용한다 - 새 컴포넌트를 안 만든다(사용자 지적).
+func _build_game_over_result_row(player_index: int, rank: int, score: int, is_winner: bool) -> Control:
+	var profile: CharacterProfile = player_character_assignments[player_index] if player_index < player_character_assignments.size() else null
+
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.content_margin_left = 8
+	style.content_margin_right = 8
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
+	if is_winner:
+		# 캡처했을 때 지저분해 보이면 안 된다(사용자 지적) - 테두리 하나로만 강조.
+		style.bg_color = Color(1.0, 0.85, 0.3, 0.15)
+		style.border_color = Color(1.0, 0.85, 0.3)
+		style.set_border_width_all(2)
+		style.set_corner_radius_all(6)
+	else:
+		style.bg_color = Color(1, 1, 1, 0.04)
+		style.set_corner_radius_all(6)
+	panel.add_theme_stylebox_override("panel", style)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	panel.add_child(row)
+
+	var thumb_box := Control.new()
+	thumb_box.custom_minimum_size = Vector2(RESULT_THUMBNAIL_SIZE, RESULT_THUMBNAIL_SIZE)
+	thumb_box.clip_contents = true
+	var texture_rect := TextureRect.new()
+	texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	thumb_box.add_child(texture_rect)
+	# character_select_panel.gd/online_screen.gd와 같은 이유 - 처음 그려질
+	# 때는 박스 크기가 아직 (0,0)일 수 있어서, 실제 크기가 잡히면 다시 맞춘다.
+	thumb_box.resized.connect(func() -> void:
+		var center_crop := CharacterPortrait.thumbnail_should_center_crop(profile)
+		TextureFit.fit(texture_rect, CharacterPortrait.resolve_thumbnail_texture(profile), thumb_box.size, true, 0.5 if center_crop else 0.0)
+	)
+	row.add_child(thumb_box)
+
+	var rank_label := Label.new()
+	rank_label.text = "%d위" % rank
+	rank_label.custom_minimum_size = Vector2(48, 0)
+	rank_label.add_theme_font_size_override("font_size", 18)
+	if is_winner:
+		rank_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
+	row.add_child(rank_label)
+
+	var name_label := Label.new()
+	var display_name := profile.display_name if profile != null else "플레이어 %d" % (player_index + 1)
+	if _departed_player_indices.has(player_index):
+		display_name += " (나감)"
+	name_label.text = display_name
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.clip_text = true
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(name_label)
+
+	var score_label := Label.new()
+	score_label.text = "%d점" % score
+	score_label.add_theme_font_size_override("font_size", 16)
+	score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(score_label)
+
+	return panel
+
+
+## 2-4의 "리모컨" 구조(사용자 지적) - 화면은 자기가 로컬인지 온라인인지
+## 몰라야 한다. 어떤 버튼이 있어야 하는지는 컨트롤러의 get_game_over_actions()가
+## {"id", "label"} 목록으로 정하고, 화면은 받은 대로 버튼을 만들어 누르면
+## _on_game_over_action_pressed(id)로 넘길 뿐이다.
+func _rebuild_game_over_buttons() -> void:
+	for child in game_over_buttons_row.get_children():
+		game_over_buttons_row.remove_child(child)
+		child.queue_free()
+
+	for entry in active_controller.get_game_over_actions():
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(140, 44)
+		button.text = entry["label"]
+		button.pressed.connect(_on_game_over_action_pressed.bind(entry["id"]))
+		game_over_buttons_row.add_child(button)
