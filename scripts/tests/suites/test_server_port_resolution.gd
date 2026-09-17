@@ -17,6 +17,8 @@ func run(r) -> void:
 	_test_yacht_dice_port_env_used_when_set(r)
 	_test_render_port_env_takes_priority_over_yacht_dice_port(r)
 	_test_port_override_wins_over_everything(r)
+	_test_bind_address_defaults_to_wildcard(r)
+	_test_bind_address_override_wins(r)
 
 
 func _make_server() -> Node:
@@ -63,3 +65,21 @@ func _test_port_override_wins_over_everything(r) -> void:
 	server.port_override = 12345
 	r.expect_eq("port_override(테스트 전용)는 환경변수보다도 항상 우선함", server._resolve_port(), 12345)
 	_clear_env()
+
+
+## 헬스체크 후보 C 후속(실제 배포 사고 - Render 스캐너가 Godot의 내부
+## 전용 포트까지 찾아내 찔러봄) - 바인드 주소 기본값은 기존 로컬 개발
+## 동작을 그대로 유지해야 하므로 "*"(모든 인터페이스)다. CLI 인자로만
+## 바뀌므로(포트처럼 환경변수 경로가 없음) 여기서는 기본값/override만
+## 확인한다 - CLI 인자 자체는 test_server_port_resolution.gd의 나머지
+## 테스트들과 같은 이유로 이 테스트 스위트의 실제 실행 인자를 못 바꾸므로
+## 검증 범위 밖이다.
+func _test_bind_address_defaults_to_wildcard(r) -> void:
+	var server := _make_server()
+	r.expect_eq("CLI 인자/override가 없으면 기본값 \"*\"(로컬 개발 기존 동작 유지)", server._resolve_bind_address(), "*")
+
+
+func _test_bind_address_override_wins(r) -> void:
+	var server := _make_server()
+	server.bind_address_override = "127.0.0.1"
+	r.expect_eq("bind_address_override(테스트 전용)가 우선함", server._resolve_bind_address(), "127.0.0.1")

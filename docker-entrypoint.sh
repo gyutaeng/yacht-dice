@@ -21,8 +21,16 @@ fi
 export PORT
 envsubst '${PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
-echo "[entrypoint] Godot 시작 (내부 포트 $INTERNAL_PORT, 공개 포트 $PORT는 nginx가 받음)"
-godot --headless --path /app res://server_main.tscn -- "$INTERNAL_PORT" &
+# 헬스체크 후보 C 후속(실제 배포에서 발견) - Godot이 0.0.0.0에 바인딩된
+# 채로 두면 Render의 포트 스캐너가 이 내부 전용 포트까지 찾아내 평범한
+# HTTP로 계속 찔러본다("Detected a new open port TCP:8910" +
+# "Not enough response headers" 에러가 1초마다 반복돼 [서버][연결계측]
+# 로그가 묻히고, Render가 이 포트를 트래픽 라우팅 대상으로 착각할
+# 위험까지 있었다). 127.0.0.1로 바인딩해서 같은 컨테이너 안의 nginx만
+# 접속 가능하게 하고 외부(Render 스캐너 포함)에서는 아예 안 보이게 한다 -
+# 외부에 노출되는 것은 nginx뿐이어야 한다.
+echo "[entrypoint] Godot 시작 (내부 포트 $INTERNAL_PORT, 127.0.0.1 전용 - 공개 포트 $PORT는 nginx가 받음)"
+godot --headless --path /app res://server_main.tscn -- "$INTERNAL_PORT" "127.0.0.1" &
 GODOT_PID=$!
 
 # nginx가 Godot보다 먼저 요청을 받으면(특히 무료 플랜이 유휴 정지에서

@@ -18,6 +18,20 @@ extends Node
 # (RoomManager/Room이 네트워크를 몰라야 헤드리스로 테스트할 수 있으므로).
 
 const DEFAULT_PORT := 8910
+
+# 헬스체크 후보 C 후속(사용자 지적) - 기본값은 기존 동작(로컬 개발,
+# `run_server.bat`)을 그대로 유지하기 위해 "*"(모든 인터페이스, Godot
+# 엔진 기본값)다. Render 배포용 Docker 컨테이너 안에서는 nginx가 공개
+# 포트를 대신 받고 Godot은 nginx가 있는 같은 컨테이너 안에서만 보이면
+# 되므로, `docker-entrypoint.sh`가 CLI 인자로 "127.0.0.1"을 명시적으로
+# 넘긴다 - 그러면 Render의 포트 스캐너가 Godot의 WebSocket 전용 포트를
+# 직접 찾아내 평범한 HTTP로 찔러보는 일이 없어진다(실제로 겪음 - "Not
+# enough response headers"/"Detected a new open port TCP:8910" 로그가
+# 1초에 한 번씩 반복돼 [서버][연결계측] 로그가 묻히고, Render가 이
+# 포트를 트래픽 라우팅 대상으로 오인할 위험까지 있었다). **이 값을
+# 다시 "*"로 되돌리면 같은 문제가 재발한다** - 컨테이너 안에서 Godot은
+# 항상 내부 전용(127.0.0.1)이어야 하고, 외부에 노출되는 것은 nginx뿐이다.
+const DEFAULT_BIND_ADDRESS := "*"
 const PORT_ENV_VAR := "YACHT_DICE_PORT"
 
 # 2-7(Render 상시 배포 사전 조사) - Render의 Web Service는 자기가 정한
@@ -34,6 +48,7 @@ const RENDER_PORT_ENV_VAR := "PORT"
 # 실제 배포 진입점(res://server_main.tscn)은 이 값을 절대 안 건드린다.
 var port_override: int = -1
 var outbound_buffer_override_bytes: int = -1
+var bind_address_override: String = ""
 
 # 2-5(캐릭터 팩 전송) §2단계. 수집 창은 짧게(전원의 select_character가 이미
 # 로비 단계에서 다 도착해 있으므로 request_character_pack은 거의 동시에
@@ -142,6 +157,7 @@ func _ready() -> void:
 
 func _start_server() -> void:
 	var port := _resolve_port()
+	var bind_address := _resolve_bind_address()
 
 	# 결측 청크 조사(2-5 후속) - create_server() 전에 설정해야 반영된다
 	# (클라이언트 쪽에서 순서가 중요함을 확인한 것과 같은 이유). 서버는
@@ -169,7 +185,7 @@ func _start_server() -> void:
 		get_tree().quit(1)
 		return
 
-	var err := peer.create_server(port)
+	var err := peer.create_server(port, bind_address)
 	if err != OK:
 		if err == ERR_ALREADY_IN_USE:
 			# 사용자 신고("서버를 껐다 켰더니 접속이 안 됨") 조사용 - 로컬
@@ -185,6 +201,11 @@ func _start_server() -> void:
 	peer.peer_connected.connect(_on_peer_connected)
 	peer.peer_disconnected.connect(_on_peer_disconnected)
 
+	# 헬스체크 후보 C 후속(사용자 지적) - 실제로 어디에 붙었는지 로그로
+	# 안 보이면 "0.0.0.0으로 되돌아갔는데 아무도 못 알아챘다" 같은 사고가
+	# 조용히 재발한다.
+	var binding_note := "모든 인터페이스" if bind_address == "*" else "외부 노출 안 됨 - 컨테이너 내부 전용 등"
+	print("[서버] 바인딩: %s:%d (%s)" % [bind_address, port, binding_note])
 	print("=== 요트다이스 서버 시작 (포트 %d) ===" % port)
 
 
@@ -234,6 +255,23 @@ func _resolve_port() -> int:
 		return env_value.to_int()
 
 	return DEFAULT_PORT
+
+
+## 포트와 같은 방식(CLI 인자가 최우선) - 두 번째 CLI 인자가 바인드 주소다
+## (`-- <포트> <바인드 주소>`). 환경변수 경로는 없다 - Render가 바인드
+## 주소를 지정해주는 표준 환경변수가 따로 없고, 이 값은 "로컬 개발이냐
+## 컨테이너 안이냐"만 구분하면 되므로 컨테이너 시작 스크립트가 CLI
+## 인자로 명시하는 것만으로 충분하다(포트처럼 여러 배포 환경을 오가며
+## 값이 계속 바뀌는 것도 아님).
+func _resolve_bind_address() -> String:
+	if not bind_address_override.is_empty():
+		return bind_address_override
+
+	var args := OS.get_cmdline_user_args()
+	if args.size() >= 2 and not args[1].is_empty():
+		return args[1]
+
+	return DEFAULT_BIND_ADDRESS
 
 
 func _on_peer_connected(id: int) -> void:
