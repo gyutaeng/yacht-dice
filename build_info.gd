@@ -59,16 +59,68 @@ static var DEBUG_MODE: bool = not OS.has_feature("yd_release")
 
 
 func _ready() -> void:
-	print("[YachtDice] 빌드: %s (%s) (디버그 기능: %s)" % [BUILD_TIME, BUILD_COMMIT, "켜짐" if DEBUG_MODE else "꺼짐"])
+	var stamp := _resolve_display_stamp()
+	print("[YachtDice] 빌드: %s (%s) (디버그 기능: %s)" % [stamp["time"], stamp["commit"], "켜짐" if DEBUG_MODE else "꺼짐"])
 	if OS.has_feature("web"):
-		_stamp_browser()
+		_stamp_browser(stamp)
+
+
+## 2-7 후속(사용자 지적) - 서버는 export를 안 거치고 소스에서 직접 실행되는
+## 경우가 있는데(로컬 테스트, `run_server.bat` 등), 그럴 땐 BUILD_TIME/
+## BUILD_COMMIT이 "마지막으로 export/Docker 빌드했던 시점"에 멈춰 있어서
+## 오늘 고친 코드로 실행 중인데도 어제 날짜가 찍히는 거짓말을 한다(실제로
+## 겪음 - 연결계측 로그는 오늘 코드가 맞는데 배너만 어제를 가리켰다).
+##
+## `OS.has_feature("template")`는 실제 export된 바이너리(웹/데스크톱, debug/
+## release 전부)에서만 참이고, 에디터 바이너리로 소스를 직접 돌리는 모든
+## 경우(`--headless`로 씬을 돌리는 것 포함, 실측으로 확인함)에는 거짓이다 -
+## 그래서 이 값으로 "지금 export된 빌드를 실행 중인가"를 정확히 가른다.
+## export된 빌드는 원본 대신 pck 안 리소스로 도니 res://가 git 저장소를
+## 가리키지 않아 아래 git 시도가 자연히 실패해서 baked 값을 그대로 쓴다 -
+## 이 함수가 export 결과를 잘못 덮어쓸 걱정은 구조적으로 없다.
+func _resolve_display_stamp() -> Dictionary:
+	if not OS.has_feature("template"):
+		var live_commit := _resolve_runtime_commit()
+		if not live_commit.is_empty():
+			return {
+				"time": Time.get_datetime_string_from_system(false, true).substr(0, 16),
+				"commit": live_commit,
+			}
+		if BUILD_COMMIT == "unknown":
+			# git도 못 읽고 export/Docker 스탬프도 없다 - 틀린 값을 보여주는
+			# 것보다 모른다고 하는 게 낫다(사용자 지적).
+			return {"time": BUILD_TIME, "commit": "unknown(소스 직접 실행 - 스탬프 없음)"}
+	return {"time": BUILD_TIME, "commit": BUILD_COMMIT}
+
+
+## git으로 짧은 커밋 해시를 읽는다(addons/build_stamp의 같은 이름 함수와
+## 판정 기준이 동일 - 코드가 다른 이유는 여기는 EditorPlugin이 아니라 게임
+## 런타임 코드라 상속/공유가 자연스럽지 않아서다). git이 없거나 이 폴더가
+## 저장소가 아니면 빈 문자열을 돌려준다 - 실패를 절대 밖으로 전파하지
+## 않는다(서버가 못 켜지는 일은 없어야 함).
+func _resolve_runtime_commit() -> String:
+	var project_dir := ProjectSettings.globalize_path("res://")
+
+	var hash_output := []
+	var hash_exit := OS.execute("git", ["-C", project_dir, "rev-parse", "--short", "HEAD"], hash_output, true)
+	if hash_exit != 0 or hash_output.is_empty():
+		return ""
+	var commit_hash: String = String(hash_output[0]).strip_edges()
+	if commit_hash.is_empty():
+		return ""
+
+	var status_output := []
+	var status_exit := OS.execute("git", ["-C", project_dir, "status", "--porcelain"], status_output, true)
+	var is_dirty := status_exit == 0 and not status_output.is_empty() and not String(status_output[0]).strip_edges().is_empty()
+
+	return "%s-dirty" % commit_hash if is_dirty else commit_hash
 
 
 ## HTML 셸의 head_include가 심어둔 배너(#yd-build-banner)를 실제 빌드 시각으로
 ## 갱신한다. 이 함수가 실행됐다는 것 자체가 "엔진이 실제로 부팅해서 이
 ## GDScript까지 실행됐다"는 증거라, 배너 텍스트가 "HTML 셸 로드됨"에서 안
 ## 바뀌면 엔진/WASM 초기화 단계에서 멈췄다는 뜻이다.
-func _stamp_browser() -> void:
+func _stamp_browser(stamp: Dictionary) -> void:
 	var debug_label := "디버그 켜짐" if DEBUG_MODE else "디버그 꺼짐"
 	var js := """
 (function() {
@@ -82,5 +134,5 @@ func _stamp_browser() -> void:
 	b.textContent = '빌드: %s (%s) (엔진 시작됨, %s)';
 	console.log('[YachtDice] 빌드: %s (%s) (엔진이 실제로 시작되어 이 GDScript가 실행됨, %s)');
 })();
-""" % [BUILD_TIME, BUILD_COMMIT, debug_label, BUILD_TIME, BUILD_COMMIT, debug_label]
+""" % [stamp["time"], stamp["commit"], debug_label, stamp["time"], stamp["commit"], debug_label]
 	JavaScriptBridge.eval(js, true)
