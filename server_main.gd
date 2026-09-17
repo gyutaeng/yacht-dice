@@ -56,6 +56,20 @@ var _hello_confirmed: Dictionary = {}  # peer_id -> true
 var _last_seen_msec: Dictionary = {}  # peer_id(int) -> msec
 var _next_ping_broadcast_msec: int = 0
 
+# 2-7 사전 조사(연결 유지 시간 실측 준비) - Render 무료 플랜에서 WebSocket
+# 연결이 얼마나 유지되는지가 이 계획의 최대 변수라, 실제 배포 전에
+# 로컬에서 먼저 로그 형식을 만들어둔다. _connected_since_msec는 접속
+# 시각, _last_sent_msec는 "마지막으로 실제 put_packet()이 성공한 시각"
+# (put_packet 반환값을 못 믿는다는 게 확정 2에서 이미 밝혀졌으므로,
+# _send()/_flush_outgoing_queues()가 실제 성공을 확인한 지점에서만 갱신한다).
+# _last_seen_msec(위, 이미 있음)를 "마지막 수신"으로 그대로 재사용한다 -
+# 별도 필드를 안 만든 이유는 그 필드가 이미 정확히 같은 뜻(뭐든 메시지가
+# 온 시각)이기 때문이다.
+var _connected_since_msec: Dictionary = {}  # peer_id(int) -> msec
+var _last_sent_msec: Dictionary = {}  # peer_id(int) -> msec
+var _next_connection_heartbeat_msec: int = 0
+const CONNECTION_HEARTBEAT_INTERVAL_MSEC := 30000
+
 # 사용자 신고("두 번째 게임 도중 서버 접속이 끊김", 재현 조건 미상) 조사용 -
 # WebSocketMultiplayerPeer의 peer_disconnected(id)는 사유를 안 주므로,
 # 서버가 스스로 끊는 경로(hello 타임아웃/ping 무응답)에서만 이유를 미리
@@ -187,6 +201,7 @@ func _process(_delta: float) -> void:
 			peer.disconnect_peer(id)
 
 	_service_ping_timeouts(now)
+	_service_connection_heartbeat(now)
 	_service_transferring_rooms(now)
 	_service_in_game_rooms(now)
 	_service_rematch_rooms(now)
@@ -225,6 +240,7 @@ func _on_peer_connected(id: int) -> void:
 	print("[서버] 접속: peer %d" % id)
 	_pending_since[id] = Time.get_ticks_msec()
 	_last_seen_msec[id] = Time.get_ticks_msec()
+	_connected_since_msec[id] = Time.get_ticks_msec()
 
 
 ## 사용자 신고("두 번째 게임 도중 서버 접속이 끊김") 조사용 - 사유(우리가
@@ -233,15 +249,20 @@ func _on_peer_connected(id: int) -> void:
 ## "핑이 안 와서 서버가 끊었다"/"상대가 갑자기 사라졌다(네트워크 이상 등
 ## 엔진이 사유를 안 주는 경우)"를 최소한 구분할 수 있다.
 func _on_peer_disconnected(id: int) -> void:
+	var now := Time.get_ticks_msec()
 	var last_seen: int = _last_seen_msec.get(id, -1)
-	var elapsed_text := ("%.1f초 전" % ((Time.get_ticks_msec() - last_seen) / 1000.0)) if last_seen >= 0 else "기록 없음"
+	var elapsed_text := ("%.1f초 전" % ((now - last_seen) / 1000.0)) if last_seen >= 0 else "기록 없음"
 	var reason: String = _disconnect_reason.get(id, "상대가 스스로 닫음(또는 네트워크 오류 - 엔진이 구체적 사유를 안 줌)")
-	print("[서버] 연결 해제: peer %d - 사유=%s, 마지막 수신=%s" % [id, reason, elapsed_text])
+	var connected_since: int = _connected_since_msec.get(id, -1)
+	var total_alive_text := ("%.1f" % ((now - connected_since) / 1000.0)) if connected_since >= 0 else "?"
+	print("[서버][연결계측] 연결 해제: peer %d, 총 유지 %s초, 사유=%s, 마지막 수신=%s" % [id, total_alive_text, reason, elapsed_text])
 	_disconnect_reason.erase(id)
 	_pending_since.erase(id)
 	_hello_confirmed.erase(id)
 	_outgoing_queues.erase(id)
 	_last_seen_msec.erase(id)
+	_connected_since_msec.erase(id)
+	_last_sent_msec.erase(id)
 	_remove_peer_and_notify(id, "disconnected", false)
 
 
@@ -260,6 +281,33 @@ func _service_ping_timeouts(now: int) -> void:
 			print("[서버] peer %d: %.0f초간 무응답 - 연결 종료" % [id, NetProtocol.PING_TIMEOUT_MSEC / 1000.0])
 			_disconnect_reason[id] = "핑 무응답(%.0f초)" % (NetProtocol.PING_TIMEOUT_MSEC / 1000.0)
 			peer.disconnect_peer(id)
+
+
+## 2-7 사전 조사(연결 유지 시간 실측 준비) - 30초마다, 아무 일이 없어도
+## 지금 붙어있는 접속 전부의 유지 시간을 찍는다. Render 무료 플랜에서
+## 유휴 연결이 몇 분 만에 끊기는지 알아내려면 "언제부터 붙어있었는지"
+## 기록이 계속 남아야 한다 - 연결이 끊긴 뒤(_on_peer_disconnected)에
+## 남기는 로그만으로는 "얼마나 버티다 끊겼는지"는 알아도 "지금 몇 초째
+## 살아있는지"를 실시간으로 못 보므로 별도로 필요하다. 마지막 수신/송신
+## 시각을 같이 남기는 이유는 유휴(우리 쪽에서 아무것도 안 보내고 안
+## 받은 채 방치) 때문에 끊기는 것과 그냥 시간 자체가 다 돼서 끊기는 것을
+## 구분하기 위함이다 - 예를 들어 ping을 5초마다 계속 보내는데도(마지막
+## 송신이 항상 5초 이내) 특정 시점에 끊기면 "유휴 타임아웃"이 아니라
+## "하드 타임 리밋"이라는 뜻이 된다.
+func _service_connection_heartbeat(now: int) -> void:
+	if now < _next_connection_heartbeat_msec:
+		return
+	_next_connection_heartbeat_msec = now + CONNECTION_HEARTBEAT_INTERVAL_MSEC
+
+	var connection_count := _connected_since_msec.size()
+	for id in _connected_since_msec.keys():
+		var connected_since: int = _connected_since_msec[id]
+		var alive_sec := (now - connected_since) / 1000.0
+		var last_seen: int = _last_seen_msec.get(id, -1)
+		var last_seen_text := ("%.1f초 전" % ((now - last_seen) / 1000.0)) if last_seen >= 0 else "기록 없음"
+		var last_sent: int = _last_sent_msec.get(id, -1)
+		var last_sent_text := ("%.1f초 전" % ((now - last_sent) / 1000.0)) if last_sent >= 0 else "기록 없음"
+		print("[서버][연결계측] 유지: peer %d, %.1f초 경과, 현재 접속 수 %d, 마지막 수신=%s, 마지막 송신=%s" % [id, alive_sec, connection_count, last_seen_text, last_sent_text])
 
 
 ## 메시지 크기 상한(§2.0)을 넘으면 내용을 해석하지 않고 끊는다 - 다만 저수준
@@ -1358,6 +1406,7 @@ func _send(peer_id: int, type: String, payload: Dictionary, on_sent: Callable = 
 		_outgoing_queues[peer_id] = queue
 		return false
 
+	_last_sent_msec[peer_id] = Time.get_ticks_msec()
 	if on_sent.is_valid():
 		on_sent.call()
 	return true
@@ -1392,6 +1441,7 @@ func _flush_outgoing_queues() -> void:
 				break
 			if peer.put_packet(entry["bytes"]) != OK:
 				break
+			_last_sent_msec[peer_id] = Time.get_ticks_msec()
 			queue.pop_front()
 			var on_sent: Callable = entry.get("on_sent", Callable())
 			if on_sent.is_valid():
