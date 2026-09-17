@@ -76,7 +76,7 @@ RUN godot --headless --editor --quit-after 60 --path /app 2>&1 | tail -n 40; \
 # envsubst로 채워 넣어 생성한다 - nginx는 설정 파일에서 환경변수를 직접
 # 못 읽는다). 기본 nginx.conf/사이트 설정은 안 씀 - 이 템플릿 하나로 충분.
 COPY nginx.conf.template /etc/nginx/nginx.conf.template
-RUN chmod +x /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh /app/docker-log-filter.sh
 
 # 문서화 목적일 뿐 실제 공개 포트는 PORT 환경변수(Render가 주입, nginx가
 # 받음)가 결정한다 - EXPOSE 자체가 포트를 바꾸지는 않는다. Godot은 더 이상
