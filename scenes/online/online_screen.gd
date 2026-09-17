@@ -34,7 +34,21 @@ signal game_reconnected()
 ## 보여준다.
 signal reconnect_exhausted()
 
-const DEFAULT_SERVER_URL := "ws://127.0.0.1:8910"
+## 2-7 후속(접속 주소 자동 분기, 사용자 확정, 2026-09-17) - 배포 빌드
+## (export_presets.cfg의 "Web (release)"에만 붙는 "yd_release" 기능
+## 태그 - build_info.gd의 DEBUG_MODE 판정과 같은 방식)는 아래
+## RENDER_SERVER_URL을 기본값으로 쓰고, 그 외 빌드(에디터/Web (dev))는
+## DEV_SERVER_URL을 쓴다 - 불특정 다수에게 공개하는 배포 빌드가 주소를
+## 직접 입력하게 둘 수 없다(트위터 등으로 공개 시 낯선 사람이 처음
+## 접속하는 경로).
+##
+## ★ RENDER_SERVER_URL은 Render 서비스를 삭제하고 다시 만들면 바뀐다
+## (새 URL이 배정됨) - 그때는 이 상수만 고치면 된다.
+## ★ 이 값을 바꾸면 클라이언트 재빌드 + GitHub Pages 재배포가 반드시
+## 필요하다 - 웹 클라이언트는 이미 export된 정적 파일이라 여기 소스를
+## 고쳐도 이미 배포된 web_build에는 반영되지 않는다.
+const RENDER_SERVER_URL := "wss://yacht-dice-server-4wqa.onrender.com"
+const DEV_SERVER_URL := "ws://127.0.0.1:8910"
 
 var _client: GameClient = GameClient.new()
 var _pack_transfer: PackTransferClient = PackTransferClient.new()
@@ -53,6 +67,9 @@ var _my_pack_bytes: PackedByteArray = PackedByteArray()
 var _my_pack_hash: String = ""
 
 @onready var _connect_panel: VBoxContainer = $CenterContainer/VBox/ConnectPanel
+@onready var _server_default_label: Label = $CenterContainer/VBox/ConnectPanel/ServerDefaultLabel
+@onready var _toggle_server_input_button: Button = $CenterContainer/VBox/ConnectPanel/ToggleServerInputButton
+@onready var _server_row: HBoxContainer = $CenterContainer/VBox/ConnectPanel/ServerRow
 @onready var _server_address_edit: LineEdit = $CenterContainer/VBox/ConnectPanel/ServerRow/ServerAddressEdit
 @onready var _my_thumbnail: TextureRect = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/ThumbnailClip/ThumbnailTexture
 @onready var _my_thumbnail_clip: Control = $CenterContainer/VBox/ConnectPanel/MyCharacterRow/ThumbnailClip
@@ -125,7 +142,18 @@ func _ready() -> void:
 	# print()를 못 믿으므로(1-5) 이 화면 로그가 유일하게 믿을 수 있는 창구다.
 	_client.debug_log.connect(_append_transfer_debug_log)
 	_transfer_debug_log.visible = BuildInfo.DEBUG_MODE
-	_server_address_edit.text = DEFAULT_SERVER_URL
+
+	# 잘못된 주소가 들어간 배포본을 나중에 눈으로 구분할 수 있어야 한다는
+	# 요청(사용자) - BuildInfo.DEBUG_MODE와 무관하게(배포 빌드에서도) 항상
+	# 화면에 그대로 보이는 라벨에 남긴다. 콘솔 print()는 웹에서 못 믿는다는
+	# 게 이미 확인된 사실이라(1-5) 화면 표시를 신뢰할 창구로 쓴다.
+	var is_release_build := OS.has_feature("yd_release")
+	var default_url := RENDER_SERVER_URL if is_release_build else DEV_SERVER_URL
+	_server_address_edit.text = default_url
+	_server_default_label.text = "접속 서버: %s (%s 빌드)" % [default_url, "배포" if is_release_build else "개발"]
+	_toggle_server_input_button.pressed.connect(func() -> void:
+		_server_row.visible = not _server_row.visible
+	)
 
 	var default_profiles := CharacterLibrary.get_selectable_profiles()
 	set_my_profile(default_profiles[0] if not default_profiles.is_empty() else null)
