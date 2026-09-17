@@ -1,0 +1,66 @@
+# 2-7 후속(헬스체크 후보 C) - Godot의 WebSocket 서버는 평범한 HTTP
+# 요청에 응답하지 못한다(실측으로 확인됨 - Render가 "No open HTTP ports
+# detected"로 첫 배포를 실패시킴). 이 nginx가 공개 포트를 대신 받아서
+# WebSocket 업그레이드가 아닌 요청엔 직접 200을 주고, 업그레이드 요청만
+# 내부 Godot 서버로 넘긴다. `${PORT}`는 컨테이너 시작 시
+# `docker-entrypoint.sh`가 envsubst로 실제 값을 채워 넣는다(nginx는
+# 설정 파일에서 환경변수를 직접 못 읽음).
+
+worker_processes 1;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # nginx 기본 로그는 파일(/var/log/nginx/access.log 등)에 쓰인다 -
+    # 컨테이너 안에서 이대로 두면 Render Logs 탭에 nginx 로그가 전혀 안
+    # 보인다(조용히 사라지는 로그 - 이 프로젝트가 계속 경계해온 "계기가
+    # 거짓말하는" 패턴). 반드시 표준 출력/에러로 돌리고, Godot 로그
+    # (`[YachtDice]`/`[서버]` 접두어)와 섞여도 구분되게 `[nginx]` 접두어를
+    # 붙인다.
+    log_format withprefix '[nginx] $remote_addr - [$time_local] "$request" $status $body_bytes_sent "$http_upgrade"';
+    access_log /dev/stdout withprefix;
+    error_log /dev/stderr warn;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen ${PORT};
+
+        location / {
+            # Upgrade 헤더가 없는 평범한 요청(Render의 포트 감지/헬스 체크,
+            # 사람이 브라우저로 열어보는 것 포함)엔 여기서 바로 200을
+            # 준다. 본문에 사람이 읽을 수 있는 문구를 넣는다 - 빈 200은
+            # "떠 있는지 아닌지" 눈으로 구분이 안 된다(사용자 요청).
+            if ($http_upgrade != "websocket") {
+                return 200 "yacht-dice server: ok\n";
+            }
+
+            # WebSocket 업그레이드 요청만 내부 Godot 서버로 넘긴다.
+            # proxy_http_version 1.1 + Upgrade/Connection 헤더 전달이
+            # 없으면 업그레이드 자체가 성립하지 않는다(가장 흔한 실패
+            # 원인).
+            proxy_pass http://127.0.0.1:8910;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+
+            # ★ 반드시 넉넉하게 유지할 것(사용자 지적) - 기본값(60초)은
+            # 프록시된 연결에서 60초 동안 데이터가 없으면 nginx가 스스로
+            # 끊는다. 지금 이 프로젝트가 하려는 일이 하필 "연결이 얼마나
+            # 오래 유지되는가"(Render 무료 플랜 유휴 정지 실측)이므로,
+            # 이 값을 기본으로 두면 nginx가 끊은 걸 Render가 끊은 것으로
+            # 착각하게 된다. 클라이언트가 5초마다 ping을 보내므로 실제로
+            # 이 타임아웃에 걸릴 일은 없어야 정상이지만, 방어적으로
+            # 넉넉히(1시간) 잡아둔다 - 지우거나 줄이지 말 것.
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+    }
+}

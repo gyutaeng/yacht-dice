@@ -1,19 +1,26 @@
 # 2-7(Render 상시 배포) - `docs/deployment_checklist.md` "2-7 사전 조사"의
 # 방식 (A)를 따른다: 프로젝트 소스 + Godot 엔진 바이너리를 이미지에 같이
-# 넣고, 컨테이너 시작 시 `godot --headless --path /app res://server_main.tscn`
-# 으로 실행한다 - 이건 로컬에서 이미 수없이 검증된 실행 방식(`run_server.bat`
-# 과 완전히 같은 커맨드라인)을 그대로 재사용하는 것이라 export 과정에서
-# 생길 수 있는 새로운 변수를 늘리지 않는다.
+# 넣는다. 실행은 `docker-entrypoint.sh`(CMD, 맨 아래)가 맡는다 - Godot
+# 헤드리스 서버를 내부 고정 포트(8910)에 띄우고, nginx가 Render의 공개
+# 포트(PORT)를 받아 평범한 HTTP 요청엔 직접 답하고 WebSocket 업그레이드만
+# Godot으로 넘긴다(헬스체크 후보 A가 "No open HTTP ports detected"로 실측
+# 실패해서 후보 C로 전환 - `docs/deployment_checklist.md` "단계 5 첫 배포
+# 결과"/"후보 C 설계안" 참고).
 FROM debian:bookworm-slim
 
 # Godot는 --headless로 돌아도 시작 시 그래픽/오디오 관련 공유 라이브러리를
 # 찾으려 한다(실제로 못 쓰더라도 라이브러리 자체가 없으면 시작이 실패할 수
 # 있음) - 그래서 X11/GL/오디오 관련 최소 런타임 라이브러리를 같이 깐다.
+# nginx/gettext-base(envsubst)/bash는 헬스체크 후보 C(프록시) 구성에
+# 필요하다 - docs/deployment_checklist.md "후보 C 설계안" 참고.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         wget \
         unzip \
         git \
+        bash \
+        nginx \
+        gettext-base \
         libx11-6 \
         libxcursor1 \
         libxinerama1 \
@@ -64,11 +71,22 @@ RUN COMMIT_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; \
 RUN godot --headless --editor --quit-after 60 --path /app 2>&1 | tail -n 40; \
     test -d /app/.godot/imported
 
-# 문서화 목적일 뿐 실제 리슨 포트는 PORT 환경변수(Render가 주입)가
-# 결정한다(server_main.gd::_resolve_port() 참고) - EXPOSE 자체가 포트를
-# 바꾸지는 않는다.
+# 헬스체크 후보 C - nginx.conf.template을 nginx의 표준 설정 경로에 둔다
+# (실제 nginx.conf는 컨테이너 시작 시 docker-entrypoint.sh가 PORT를
+# envsubst로 채워 넣어 생성한다 - nginx는 설정 파일에서 환경변수를 직접
+# 못 읽는다). 기본 nginx.conf/사이트 설정은 안 씀 - 이 템플릿 하나로 충분.
+COPY nginx.conf.template /etc/nginx/nginx.conf.template
+RUN chmod +x /app/docker-entrypoint.sh
+
+# 문서화 목적일 뿐 실제 공개 포트는 PORT 환경변수(Render가 주입, nginx가
+# 받음)가 결정한다 - EXPOSE 자체가 포트를 바꾸지는 않는다. Godot은 더 이상
+# 공개 포트를 직접 듣지 않고 내부 고정 포트(8910, docker-entrypoint.sh
+# 참고)만 쓴다.
 EXPOSE 8910
 
 # 서버는 절대 스스로 안 끝난다(Ctrl+C로만 종료 - CLAUDE.md 2-3 참고) -
-# 그래서 헬스체크/타임아웃으로 종료를 유도하는 방식은 안 쓴다.
-CMD ["godot", "--headless", "--path", "/app", "res://server_main.tscn"]
+# 그래서 헬스체크/타임아웃으로 종료를 유도하는 방식은 안 쓴다. 대신
+# Godot/nginx 중 하나가 죽으면 docker-entrypoint.sh가 나머지도 같이
+# 내리고 컨테이너 전체를 비정상 종료시킨다("프록시만 살아있고 게임
+# 서버는 죽어있는" 상태가 성립하지 않게 함 - 헬스체크 후보 C 설계).
+CMD ["/app/docker-entrypoint.sh"]
