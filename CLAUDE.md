@@ -2079,12 +2079,26 @@ margin 계산 자체가 오설정에서 영원히 거짓이 될 수 있다는 �
     단점: Dockerfile에 프록시 설치/설정이 추가되고, 움직이는 부품이
     하나 늘어 그 자체가 새 실패 지점이 될 수 있음(설정 드리프트,
     지연 한 홉 추가).
-  - **판단(사용자 확정) - 후보 A로 확정.** Health Check Path를 비워두고
-    배포한다 - Render 문서상 헬스 체크는 선택 사항이고 지정하지 않으면
-    포트 개방(TCP)으로 판정한다. 후보 C(내부 프록시)는 A가 실제
-    배포에서 실패하는 게 확인될 때만 꺼내되, 그 판단은 실제 배포 로그를
-    보고 한다 - **지금은 구현하지 않는다.** 후보 B는 사실상 후보 C를
-    GDScript로 재발명하는 셈이라 처음부터 기각.
+  - **판단(1차, 폐기됨) - 후보 A로 확정했었다.** Health Check Path를
+    비워두고 배포한다 - Render 문서상 헬스 체크는 선택 사항이고 지정하지
+    않으면 포트 개방(TCP)으로 판정한다는 근거였다. 후보 C(내부 프록시)는
+    A가 실제 배포에서 실패하는 게 확인될 때만 꺼내기로 함.
+  - **판단(2차, 실측 확정) - 후보 A는 실패, 후보 C로 전환.** 실제 첫
+    배포에서 `ERROR: Not enough response headers, got: 3, expected >= 4.`
+    (Godot이 평범한 HTTP 요청을 WebSocket 핸드셰이크로 착각하고 거부)
+    + `No open HTTP ports detected on 0.0.0.0, continuing to scan...`가
+    찍혔다 - **포트는 실제로 열려 있었고 Render의 스캐너가 접속에도
+    성공했지만, Godot이 HTTP 요청에 응답을 안 해서 Render가 "포트
+    감지 실패"로 판정했다.** 위 1차 판단이 근거로 삼은 "Health Check
+    Path를 비워두면 TCP 확인"은 **헬스 체크 자체에 대해서는 맞는
+    말이지만, 그보다 앞선 "포트 감지" 단계는 헬스 체크 설정과 무관하게
+    항상 HTTP 응답을 요구한다**는 게 이번에 드러났다 - Render 공식
+    문서/커뮤니티의 "Services running on Render must open an HTTP
+    port"가 이 단계를 가리킨 것이었다. **이 판단은 실제 배포 로그로
+    확정된 것이라 앞으로 후보 A/B를 다시 검토하지 않는다** - 자세한
+    로그/해석은 `docs/deployment_checklist.md` "단계 5 — 첫 배포 결과"
+    절 참고. **후보 C(내부 프록시)의 상세 설계는 사용자 확정 대기 중
+    (설계만 제안한 상태, 구현 전).**
   - 출처: [Health Checks – Render Docs](https://render.com/docs/health-checks),
     [Deploy to Render - websockets docs](https://websockets.readthedocs.io/en/14.1/howto/render.html)
 
