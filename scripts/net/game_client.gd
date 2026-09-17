@@ -66,9 +66,31 @@ signal player_timer(player_index: int, kind: String, seconds_left: int)
 
 enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 
+# 콜드 스타트 재접속 예산 후속(사용자 지적, 2026-09-17) - "각 연결 시도가
+# 실패로 판정되기까지 걸리는 시간"이 지금까지 명시된 적이 없었다 -
+# WebSocketMultiplayerPeer가 CONNECTING/AWAITING_HELLO_ACK 상태에서 영원히
+# 안 바뀌면(예: 서버가 응답 없이 그냥 걸려있는 경우) 이 클라이언트는
+# 무한정 기다리기만 하고 재시도 루프(ReconnectBackoff)로 절대 안 넘어갔다.
+# 이제 이 상태로 CONNECT_TIMEOUT_SEC를 넘기면 직접 실패로 판정한다 -
+# ReconnectBackoff의 재시도 사이 대기 합(1+2+4+8+16=31초) + 이 값 × 최대
+# 시도 수(6회) ≈ 91초로, 사용자가 확정한 안전값(약 90초)에 맞춘 것이다.
+const CONNECT_TIMEOUT_SEC := 10.0
+
 var _peer := WebSocketMultiplayerPeer.new()
 var _state: State = State.IDLE
-var _ever_connected := false
+# 콜드 스타트 후속(사용자 지적) - 이 값은 "raw WebSocket 연결이 한 번이라도
+# 됐는가"가 아니라 "hello_ack까지 받아서 실제로 세션이 한 번이라도 성립한
+# 적이 있는가"를 뜻해야 한다. 이전엔 raw 연결 성공 시점(CONNECTION_CONNECTED)에
+# 이 값을 true로 만들었는데, 그러면 "첫 접속인데 raw 소켓만 붙고 서버가
+# hello_ack를 안 줘서 멈춘" 콜드 스타트 상황에서도 이미 true가 돼버려,
+# 끊기면 재시도 루프(connection_failed)가 아니라 "게임 도중 끊김"
+# 경로(disconnected)로 잘못 빠질 뻔했다 - 후자는 online_screen.gd가
+# _game_already_entered가 false면 재시도 없이 그냥 포기해버리므로,
+# 정확히 콜드 스타트를 버텨야 하는 그 상황에서 재시도가 아예 안 되는
+# 회귀가 될 뻔했다. 그래서 이 값은 hello_ack를 실제로 받은 시점에만
+# true가 된다.
+var _ever_hello_acknowledged := false
+var _connecting_since_msec: int = -1
 
 # 2-5 전송 버그 수정 - WebSocketMultiplayerPeer의 기본 outbound_buffer_size는
 # 65535바이트(직접 확인함)뿐이라, 32KB 청크를 Base64로 감싼 약 43KB짜리
@@ -158,13 +180,24 @@ func _process(_delta: float) -> void:
 	if _state == State.IDLE:
 		return
 
+	if _state == State.CONNECTING or _state == State.AWAITING_HELLO_ACK:
+		var elapsed_sec := (Time.get_ticks_msec() - _connecting_since_msec) / 1000.0
+		if elapsed_sec > CONNECT_TIMEOUT_SEC:
+			_log("연결 시도 포기(%.1f초 경과, 상한 %.0f초)" % [elapsed_sec, CONNECT_TIMEOUT_SEC])
+			var was_ever_connected := _ever_hello_acknowledged
+			_reset()
+			if was_ever_connected:
+				disconnected.emit()
+			else:
+				connection_failed.emit("서버 응답이 없습니다(연결 시도 %.0f초 초과)." % CONNECT_TIMEOUT_SEC)
+			return
+
 	_peer.poll()
 	_flush_outgoing_queue()
 	var status := _peer.get_connection_status()
 
 	if status == MultiplayerPeer.CONNECTION_CONNECTED and _state == State.CONNECTING:
 		_state = State.AWAITING_HELLO_ACK
-		_ever_connected = true
 		# 결측 청크 조사 - 실제 핸드셰이크가 끝난 뒤에도 값이 유지되는지
 		# 다시 한번 되읽는다(연결 전 설정이 실제 소켓 생성 시점에 리셋되는
 		# 플랫폼별 차이가 있을 수 있어서 두 시점 다 확인).
@@ -172,7 +205,7 @@ func _process(_delta: float) -> void:
 		_send(NetProtocol.MSG_HELLO, {"protocol_version": NetProtocol.PROTOCOL_VERSION})
 
 	if status == MultiplayerPeer.CONNECTION_DISCONNECTED and _state != State.IDLE:
-		var was_ever_connected := _ever_connected
+		var was_ever_connected := _ever_hello_acknowledged
 		var suppress := _suppress_next_disconnect
 		# 4번/5번 조사(사용자 요청) - close_code/close_reason은
 		# _on_ws_peer_disconnected()가 peer_disconnected 시그널 시점에 미리
@@ -243,6 +276,7 @@ func connect_to_server(url: String) -> void:
 		connection_failed.emit("서버 주소가 올바르지 않습니다.")
 		return
 	_state = State.CONNECTING
+	_connecting_since_msec = Time.get_ticks_msec()
 
 
 func create_room(player_count: int) -> void:
@@ -315,7 +349,16 @@ func _reset() -> void:
 	_peer = WebSocketMultiplayerPeer.new()
 	_wire_peer_signals()
 	_state = State.IDLE
-	_ever_connected = false
+	_connecting_since_msec = -1
+	# 콜드 스타트 후속 - _ever_hello_acknowledged는 여기서 지우지 않는다.
+	# _reset()은 재접속 시도마다(connect_to_server() 시작 시) 매번 불리는데,
+	# 여기서 지우면 "게임 도중 재접속을 시도하다 그 재시도 자체가 또
+	# 실패/타임아웃"되는 흔한 경우에 "이 세션은 한 번도 성공한 적 없다"로
+	# 잘못 보여서 connection_failed로 잘못 빠질 뻔했다(원래 있어야 할
+	# disconnected 대신) - GameClient는 온라인 화면당 하나만 계속 쓰는
+	# 영속 객체이므로(재접속마다 새로 안 만듦), 이 값은 "이 클라이언트가
+	# 살아있는 동안 hello_ack를 한 번이라도 받은 적이 있는가"를 뜻해야
+	# 정확하고, 그러려면 개별 재시도 사이에 지워지면 안 된다.
 	_suppress_next_disconnect = false
 	_outgoing_queue.clear()
 	_last_received_msec = 0
@@ -479,6 +522,7 @@ func _handle_packet(bytes: PackedByteArray) -> void:
 	match type:
 		NetProtocol.MSG_HELLO_ACK:
 			_state = State.CONNECTED
+			_ever_hello_acknowledged = true
 			hello_acknowledged.emit()
 		NetProtocol.MSG_ROOM_CREATED:
 			room_created.emit(payload.get("code", ""), int(payload.get("player_count", 0)), payload.get("reconnect_token", ""))

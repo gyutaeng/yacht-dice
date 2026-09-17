@@ -46,6 +46,7 @@ const SUITES := [
 	preload("res://scripts/tests/suites/test_outbound_buffer_safety.gd"),
 	preload("res://scripts/tests/suites/test_online_ready_toggle.gd"),
 	preload("res://scripts/tests/suites/test_server_port_resolution.gd"),
+	preload("res://scripts/tests/suites/test_game_client_connect_timeout.gd"),
 ]
 
 
