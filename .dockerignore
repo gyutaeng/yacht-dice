@@ -15,3 +15,14 @@
 # 만족시키는 쪽을 택했다.
 .godot/
 .claude/
+
+# 소스 공개 준비 - .gitignore와 같은 이유(Pixabay 효과음 원본 재배포 금지,
+# CLAUDE.md 참고)로 로컬 디스크에는 남아있는 효과음 원본을 이미지에서도
+# 뺀다. .gitignore만으로는 부족하다 - 로컬 `docker build .`는 git 인덱스가
+# 아니라 이 디렉터리의 실제 파일을 COPY하므로, 여기서 따로 빼지 않으면
+# 로컬 이미지에만 효과음이 몰래 섞여 들어가 Render(깨끗한 git 클론이라
+# 애초에 이 파일이 없음)와 조건이 달라진다 - 위 "*.import는 안 뺀다"
+# 원칙의 명시적 예외: 이번엔 원본과 .import를 세트로 함께 빼야 소스 없는
+# .import가 안 남는다(안 그러면 아래 헤드리스 임포트 단계가 실패할 수 있음).
+assets/sfx/*.wav
+assets/sfx/*.wav.import
