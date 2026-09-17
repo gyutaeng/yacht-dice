@@ -37,6 +37,13 @@ func _ready() -> void:
 	_yacht_stream = _load_optional(YACHT_SFX_PATH)
 	_special_hand_stream = _load_optional(SPECIAL_HAND_SFX_PATH)
 
+	# 소스 공개 준비 - 효과음 원본은 라이선스 때문에 공개 저장소에 없다
+	# (CLAUDE.md 참고). 넷 다 없으면(저장소를 갓 받은 사람의 정상 상태)
+	# 완전히 조용히 넘어가지 않고 한 번은 알려준다 - 에러/경고가 아니라
+	# 그냥 안내라 print()로 충분하다.
+	if _dice_roll_stream == null and _dice_hold_stream == null and _yacht_stream == null and _special_hand_stream == null:
+		print("SfxBank: 효과음 파일 없음(assets/sfx/) - 소리 없이 진행")
+
 	GameEvents.dice_rolled.connect(_on_dice_rolled)
 	GameEvents.die_held_changed.connect(_on_die_held_changed)
 	GameEvents.special_hand_rolled.connect(_on_special_hand_rolled)
@@ -55,8 +62,10 @@ func _make_player(volume_db: float) -> AudioStreamPlayer:
 ## 아예 안 들어가므로, FileAccess로 원본을 읽으려 하면 에디터에서는(원본이
 ## 프로젝트 폴더에 그대로 있어서) 되지만 export된 빌드에서는 조용히 실패한다.
 ##
-## 파일이 아직 없으면(지금 dice_roll.wav/dice_hold.wav/yacht.wav가 그렇다) 경고 없이
-## null을 돌려준다 — 나중에 파일을 채워 넣을 자리이지, 에러 상황이 아니다.
+## 파일이 없으면 경고 없이 null을 돌려준다 — 에러 상황이 아니다. 공개
+## 저장소는 효과음 원본이 라이선스 때문에 빠져 있어(CLAUDE.md 참고)
+## 이 경로를 항상 타고, 로컬 개발 중에도 아직 안 채워 넣은 자리일 수
+## 있다 - 이유가 무엇이든 "없으면 조용히 스킵"은 항상 안전한 동작이다.
 func _load_optional(path: String) -> AudioStream:
 	if not ResourceLoader.exists(path):
 		return null
