@@ -409,10 +409,119 @@ Path 설정과 무관한, **그보다 앞선 "포트 감지" 단계 자체의 �
 
 **→ 후보 C(컨테이너 안에 작은 HTTP 프록시를 두고, 그 프록시가 평범한
 요청엔 직접 답하고 WebSocket 업그레이드 요청만 내부 Godot 서버로
-넘기는 구조)로 전환한다.** 상세 설계는 CLAUDE.md의 해당 세션 기록과
-이 문서의 다음 절(향후 구현 시 추가) 참고.
+넘기는 구조)로 전환한다.** 상세 설계는 바로 아래 절.
 
-## 8. 단계 6 — 연결 유지 시간 실측 계획 (이 계획 전체의 go/no-go 분기점)
+## 8. 후보 C 설계안 (제안 - 구현 대기, 사용자 확정 필요)
+
+**구조**: `Render가 준 $PORT → nginx(공개) → (Upgrade 헤더 없음) 200 직접 응답
+/ (Upgrade 헤더 있음) 내부 고정 포트(8910)의 Godot 서버로 전달`.
+
+### 1. 프록시 선택 - nginx 추천
+
+| 후보 | 이미지 크기 영향 | 설정 복잡도 | 비고 |
+|---|---|---|---|
+| **nginx**(추천) | 작음 - 이미 `debian:bookworm-slim` 기반이라 `apt-get install nginx`로 몇 MB 추가(이미지가 이미 200MB대라 무시할 수준) | `map $http_upgrade`/`if ($http_upgrade...)` 한 번이면 끝 - 이 정확한 패턴(WS 업그레이드 판별 후 분기)이 nginx 공식 문서에 예시로 나올 만큼 표준적 | 가장 많이 검증된 조합, 실패 사례/해결법이 이미 잘 알려져 있음 |
+| Caddy | nginx와 비슷하거나 약간 작음(단일 정적 바이너리) | `reverse_proxy`가 Upgrade 헤더를 자동 감지해서 설정이 더 짧을 수 있음 | 이 프로젝트에서 한 번도 안 써본 도구라 이번이 첫 검증 대상이 됨 - 익숙한 nginx 쪽이 위험이 적음 |
+| 직접 짠 미니 프록시(Go/Python 등) | 가장 작을 수 있음 | **가장 높음** - HTTP/WS 핸드셰이크 파싱을 직접 구현/유지해야 함 | 후보 B(Godot 자체가 HTTP도 답하게)를 기각했던 이유("미니 HTTP 서버 재구현 비용")가 그대로 적용됨 - 여기서도 기각 |
+
+**추천: nginx.** 표준적이고 검증된 방식이며, 이 프로젝트가 이미 "직접
+파싱하는 미니 서버"를 후보 B에서 기각한 논리와 일관된다.
+
+### 2. 내부 포트 처리 - 사용자 추정이 맞음
+
+지금 `_resolve_port()` 우선순위는 "CLI 인자 → `PORT` → `YACHT_DICE_PORT`
+→ 8910"이다. 컨테이너 안에는 Render가 넣어준 `PORT`가 항상 있으므로,
+Godot을 인자 없이 그냥 실행하면 `PORT`(= nginx가 공개용으로 쓸 값과
+같은 값)를 그대로 잡아버려 nginx와 포트가 충돌한다. **CLI 인자가
+최우선이므로, 컨테이너 시작 스크립트가 Godot을 실행할 때 내부 고정
+포트를 명시적으로 넘겨야 한다**(`-- 8910`) - `PORT` 환경변수는 여전히
+컨테이너 안에 존재하지만 CLI 인자가 그보다 우선이라 무시된다. 코드
+변경은 필요 없다 - 지금 우선순위 그대로 활용하면 된다.
+
+`nginx.conf`는 반대로 `PORT`를 **읽어야** 하는데, nginx는 설정 파일에서
+환경변수를 직접 못 읽는다(공식 nginx Docker 이미지가 쓰는 방식대로)
+`envsubst`로 컨테이너 시작 시점에 템플릿을 실제 설정 파일로 치환해야
+한다 - `gettext-base` 패키지(`envsubst` 제공, 아주 작음)를 추가 설치.
+
+### 3. 프로세스 동반 종료 (가장 중요, 사용자 지적)
+
+컨테이너의 시작 프로세스(entrypoint)를 얇은 bash 스크립트로 만들고,
+Godot과 nginx를 둘 다 백그라운드로 띄운 뒤 **둘 중 하나가 먼저
+끝나는 순간**(`wait -n`, bash 4.3+ 기능 - bookworm의 bash 5.2는 지원)
+**나머지 하나를 강제 종료하고, 먼저 죽은 프로세스의 종료 코드를 그대로
+컨테이너 종료 코드로 넘긴다.** 이러면 "프록시만 살아있고 게임 서버는
+죽어있는" 상태가 구조적으로 성립할 수 없다 - Godot이 죽으면 즉시
+nginx도 죽고, 컨테이너 자체가 죽은 것으로 Render에 보인다(Render가
+크래시한 서비스를 재시작하는 정책에 그대로 올라탄다). SIGTERM도
+잡아서 두 프로세스에 전달해야 한다(Render가 재배포/스케일 조정 시
+컨테이너에 SIGTERM을 보내는데, 잡지 않으면 자식 프로세스들이 안 끝난
+채로 강제 종료(SIGKILL)당할 수 있다 - "PID 1 문제").
+
+의사코드:
+```bash
+#!/bin/bash
+envsubst '${PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+godot --headless --path /app res://server_main.tscn -- 8910 &
+GODOT_PID=$!
+nginx -g "daemon off;" &
+NGINX_PID=$!
+
+trap 'kill -TERM $GODOT_PID $NGINX_PID 2>/dev/null; wait; exit 0' TERM INT
+
+wait -n
+EXIT_CODE=$?
+# 어느 쪽이 먼저 죽었는지 로그로 남기고(kill -0으로 생존 여부 확인),
+# 나머지 하나도 반드시 같이 내린다.
+kill -TERM $GODOT_PID $NGINX_PID 2>/dev/null
+wait
+exit $EXIT_CODE
+```
+
+### 4. 로그 구분
+
+Docker는 컨테이너의 시작 프로세스(위 bash 스크립트)의 stdout/stderr만
+캡처한다 - 스크립트가 Godot/nginx를 리다이렉트 없이 `&`로만 띄우면
+둘 다 부모의 stdout/stderr를 그대로 물려받아 **같은 로그 스트림에
+합쳐진다**(별도 조치 없이 자동으로 4번 요구사항의 절반은 충족됨).
+**주의할 함정 하나**: nginx는 기본값이 로그를 **파일**(`/var/log/nginx/*.log`)에
+쓰지 stdout이 아니다 - 이대로 두면 nginx 로그가 Render Logs 탭에
+아예 안 보인다(조용히 사라지는 로그 - 이 프로젝트가 계속 경계해온
+"계기가 거짓말하는" 패턴 그대로). `nginx.conf`에서 `access_log`/`error_log`를
+`/dev/stdout`/`/dev/stderr`로 명시해야 한다. 두 프로세스를 구분하려면
+nginx 쪽 `log_format`에 `[nginx]` 접두어를 넣는다 - Godot 쪽은 이미
+`[YachtDice]`/`[서버]`/`[서버][연결계측]` 접두어가 있어 구분할 필요가
+없다. (참고: 두 프로세스가 같은 스트림에 동시에 짧은 줄을 써도 리눅스
+파이프는 4KB 이하 쓰기를 원자적으로 보장하므로 로그 한 줄 안에서
+글자가 섞이는 걱정은 안 해도 된다.)
+
+### 5. 로컬 Docker 검증 계획 (Render에 올리기 전에 여기서 전부 확인)
+
+1. `docker build`로 이미지 빌드.
+2. `docker run -d --name yacht-c-test -p 18910:8910 -e PORT=8910 yacht-dice-server:latest`
+   (호스트 포트를 nginx가 듣는 포트에 매핑 - Render 환경과 동일하게
+   `PORT` 하나로 nginx/Godot 둘 다 맞춰 돌아가는지 확인).
+3. `docker logs yacht-c-test`로 Godot 배너(`[YachtDice] 빌드: ...`)와
+   nginx 로그(`[nginx] ...`)가 **둘 다** 찍히는지 확인(4번 요구사항).
+4. 평범한 HTTP 요청 확인: `curl -i http://localhost:18910/` (또는
+   PowerShell `Invoke-WebRequest`) → `200`이 와야 한다.
+5. WebSocket이 Godot까지 도달하는지 확인: 이번 세션에서 이미 만든
+   방식(실제 `GameClient`를 임시 씬으로 띄워 `ws://localhost:18910/`에
+   연결) 또는 Python `websockets` 라이브러리로 `hello`/`hello_ack`
+   핸드셰이크가 실제로 오가는지 확인 - **nginx가 단독으로 200을 준
+   것과 실제로 Godot까지 뚫린 것은 다른 확인**이므로 반드시 둘 다 본다.
+6. 프로세스 동반 종료 확인(3번 요구사항의 실측): 컨테이너 안에서 Godot
+   프로세스만 강제 종료(`docker exec yacht-c-test pkill -9 godot` 등) →
+   `docker wait yacht-c-test`로 컨테이너 자체가 종료되는지, `docker
+   inspect --format='{{.State.ExitCode}}' yacht-c-test`로 종료 코드가
+   0이 아닌지 확인.
+7. 확인 후 `docker rm -f yacht-c-test`로 정리.
+
+**여기서 6번까지 전부 통과해야 Render에 올린다** - 특히 6번은 로컬에서
+반드시 끝내야 할 항목이다(Render에 올린 뒤에 이걸 재현하려면 대시보드를
+뒤져야 해서 훨씬 비싸다).
+
+## 9. 단계 6 — 연결 유지 시간 실측 계획 (이 계획 전체의 go/no-go 분기점)
 
 ### 배경 - Render 공식 문서로 확인된 것 (2026-09-17)
 
