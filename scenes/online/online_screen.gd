@@ -90,6 +90,10 @@ var _players: Dictionary = {}  # player_index(int) -> {meta: Dictionary, ready: 
 var _pending_action: Callable = Callable()
 var _connected := false
 
+# 1번 버그(재대전 시작 안 됨) 검증용 계측 - 값이 바뀔 때만 찍어서 스팸을
+# 피한다("모른다"를 뜻하는 null로 시작 - bool 두 값 중 어느 것과도 안 겹침).
+var _last_logged_my_ready_state: Variant = null
+
 # 2-6(§6) - 첫 접속(서버 기상 대기)/게임 도중 재접속 공용 재시도 로직.
 var _reconnect_backoff := ReconnectBackoff.new()
 ## SessionStore에 저장하는 것과 별개로 살아있는 동안 바로 쓸 수 있게 들고
@@ -329,6 +333,10 @@ func _on_leave_pressed() -> void:
 func _on_ready_button_pressed() -> void:
 	var current: bool = _players.get(_my_index, {}).get("ready", false)
 	var next := not current
+	# 1번 버그(재대전 시작 안 됨) 검증용 - 서버의 "재대전 준비 수신 -
+	# 슬롯 N ready=..." 로그와 시각을 맞춰볼 수 있게, 버튼을 누른 그
+	# 순간 무엇을 보내는지 남긴다.
+	_append_transfer_debug_log("[준비 버튼 클릭] 로컬 캐시=%s → 전송값=%s" % [current, next])
 	if _players.has(_my_index):
 		_players[_my_index]["ready"] = next
 		_refresh_lobby_ui()
@@ -560,6 +568,7 @@ func _on_player_ready_changed(player_index: int, ready: bool) -> void:
 ## 캐시를 똑같이 리셋해서 서버와 다시 맞춘다 - 새 네트워크 메시지를
 ## 안 만들고 이미 오는 신호에 맞춰 로컬만 고치는 방식.
 func _on_game_ended(_winners: Array, _scores: Array) -> void:
+	_append_transfer_debug_log("[게임 종료] 서버가 전원 ready를 false로 되돌림 - 로컬 캐시도 맞춘다")
 	for player_index in _players.keys():
 		_players[player_index]["ready"] = false
 	_refresh_lobby_ui()
@@ -769,3 +778,11 @@ func _refresh_lobby_ui() -> void:
 
 	var my_ready: bool = _players.get(_my_index, {}).get("ready", false)
 	_ready_button.text = "준비 취소" if my_ready else "준비 완료"
+
+	# 1번 버그(재대전 시작 안 됨) 검증용 - 로컬 ready 캐시가 바뀔 때마다
+	# 버튼 라벨과 함께 남긴다. 서버의 "재대전 준비 수신 - 슬롯 N ready=..."
+	# 로그와 시각을 대조하면, 로컬 캐시(버튼에 뜨는 값)와 서버가 실제로
+	# 들고 있는 값이 그 순간 서로 같은지 다른지 바로 비교할 수 있다.
+	if _lobby_panel.visible and my_ready != _last_logged_my_ready_state:
+		_last_logged_my_ready_state = my_ready
+		_append_transfer_debug_log("[준비 상태] 내 슬롯=%d, 로컬 캐시=%s, 버튼 라벨=\"%s\"" % [_my_index, my_ready, _ready_button.text])
