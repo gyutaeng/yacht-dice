@@ -66,10 +66,10 @@ func _ready() -> void:
 
 
 ## 2-7 후속(사용자 지적) - 서버는 export를 안 거치고 소스에서 직접 실행되는
-## 경우가 있는데(로컬 테스트, `run_server.bat` 등), 그럴 땐 BUILD_TIME/
-## BUILD_COMMIT이 "마지막으로 export/Docker 빌드했던 시점"에 멈춰 있어서
-## 오늘 고친 코드로 실행 중인데도 어제 날짜가 찍히는 거짓말을 한다(실제로
-## 겪음 - 연결계측 로그는 오늘 코드가 맞는데 배너만 어제를 가리켰다).
+## 경우가 있는데(로컬 테스트, `run_server.bat`, Render 컨테이너의
+## `docker-entrypoint.sh` 전부 포함), 그럴 땐 BUILD_TIME/BUILD_COMMIT이
+## "마지막으로 export/Docker 빌드했던 시점"에 멈춰 있어서 오늘 고친 코드로
+## 실행 중인데도 어제 날짜가 찍히는 거짓말을 한다(실제로 겪음).
 ##
 ## `OS.has_feature("template")`는 실제 export된 바이너리(웹/데스크톱, debug/
 ## release 전부)에서만 참이고, 에디터 바이너리로 소스를 직접 돌리는 모든
@@ -78,19 +78,43 @@ func _ready() -> void:
 ## export된 빌드는 원본 대신 pck 안 리소스로 도니 res://가 git 저장소를
 ## 가리키지 않아 아래 git 시도가 자연히 실패해서 baked 값을 그대로 쓴다 -
 ## 이 함수가 export 결과를 잘못 덮어쓸 걱정은 구조적으로 없다.
+##
+## **Render 후속 정정(2026-09-17) - 시각도 stale할 수 있다는 걸 놓쳤었다.**
+## export된 빌드가 아닌 모든 경우, 커밋을 못 구했을 때도 시각만은 baked
+## BUILD_TIME(예: "2026-09-16 18:02")을 그대로 보여주고 있었다 - 커밋은
+## "모른다"고 정직하게 표시하면서 시각은 낡은 값을 계속 보여주는 모순이었다.
+## 이제 export된 빌드가 아니면 시각은 항상 "지금"(이 로그가 실제로 찍히는
+## 순간)을 쓴다 - 옛 값보다 항상 더 정직하고, Render의 배포/재시작 시각과
+## 바로 대조할 수 있어 더 쓸모도 있다.
+##
+## **Render 후속 - 커밋도 못 구하던 진짜 이유**: Render는 Docker 빌드
+## 컨텍스트에 `.git`을 안 준다(실측 확인 - 로컬 `docker build`와 달리
+## Render에 실제 배포한 뒤 커밋이 항상 "unknown"으로 찍혔다) - 그래서
+## 아래 런타임 git 시도도, Dockerfile의 `sed` 빌드 시점 스탬핑도 둘 다
+## Render에서는 처음부터 실패할 수밖에 없었다. 대신 Render가 **런타임에**
+## 항상 주입하는 `RENDER_GIT_COMMIT` 환경변수(Render 공식 문서 확인 -
+## git 저장소 접근과 무관하게 항상 제공됨)를 읽는다 - `PORT`를 읽는 것과
+## 완전히 같은 방식.
 func _resolve_display_stamp() -> Dictionary:
-	if not OS.has_feature("template"):
-		var live_commit := _resolve_runtime_commit()
-		if not live_commit.is_empty():
-			return {
-				"time": Time.get_datetime_string_from_system(false, true).substr(0, 16),
-				"commit": live_commit,
-			}
-		if BUILD_COMMIT == "unknown":
-			# git도 못 읽고 export/Docker 스탬프도 없다 - 틀린 값을 보여주는
-			# 것보다 모른다고 하는 게 낫다(사용자 지적).
-			return {"time": BUILD_TIME, "commit": "unknown(소스 직접 실행 - 스탬프 없음)"}
-	return {"time": BUILD_TIME, "commit": BUILD_COMMIT}
+	if OS.has_feature("template"):
+		return {"time": BUILD_TIME, "commit": BUILD_COMMIT}
+
+	var now_str := Time.get_datetime_string_from_system(false, true).substr(0, 16)
+
+	var live_commit := _resolve_runtime_commit()
+	if not live_commit.is_empty():
+		return {"time": now_str, "commit": live_commit}
+
+	var render_commit := OS.get_environment("RENDER_GIT_COMMIT")
+	if not render_commit.is_empty():
+		return {"time": now_str, "commit": render_commit.substr(0, 7)}
+
+	if BUILD_COMMIT != "unknown":
+		return {"time": now_str, "commit": BUILD_COMMIT}
+
+	# git도, RENDER_GIT_COMMIT도, export/Docker 빌드 시점 스탬프도 전부
+	# 없다 - 틀린 값을 보여주는 것보다 모른다고 하는 게 낫다(사용자 지적).
+	return {"time": now_str, "commit": "unknown(소스 직접 실행 - 스탬프 없음)"}
 
 
 ## git으로 짧은 커밋 해시를 읽는다(addons/build_stamp의 같은 이름 함수와
