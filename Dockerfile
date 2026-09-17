@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         wget \
         unzip \
+        git \
         libx11-6 \
         libxcursor1 \
         libxinerama1 \
@@ -37,6 +38,19 @@ RUN wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERS
 
 WORKDIR /app
 COPY . .
+
+# 2-7 후속(사용자 요청) - 서버는 export 파이프라인을 안 거치므로
+# addons/build_stamp(클라이언트 export 전용)가 여기까지는 안 닿는다.
+# 같은 목적(로그 한 줄만으로 어느 커밋이 배포됐는지 특정)을 이미지 빌드
+# 시점에 여기서 직접 채운다 - git이 실패해도(예: .git이 빠진 빌드
+# 컨텍스트) 빌드 자체는 계속돼야 하므로 실패를 절대 밖으로 전파하지
+# 않는다(`|| echo unknown`, `2>/dev/null`).
+RUN COMMIT_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; \
+    if [ "$COMMIT_HASH" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then \
+        COMMIT_HASH="${COMMIT_HASH}-dirty"; \
+    fi; \
+    sed -i "s/^const BUILD_COMMIT := \".*\"\$/const BUILD_COMMIT := \"${COMMIT_HASH}\"/" build_info.gd; \
+    echo "커밋 스탬프: ${COMMIT_HASH}"
 
 # 로컬 개발 환경에는 .import 파일이 가리키는 실제 임포트 결과물
 # (`.godot/imported/`)이 에디터를 오래 써온 캐시로 이미 쌓여 있어서 이

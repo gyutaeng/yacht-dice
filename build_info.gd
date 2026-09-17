@@ -8,8 +8,23 @@ extends Node
 # 게임이 시작될 때 이 값을 화면(브라우저 상단 배너)과 콘솔 양쪽에 찍는다.
 const BUILD_TIME := "2026-09-16 18:02"
 
-# 이 상수는 addons/build_stamp가 건드리지 않는다(정규식이 BUILD_TIME 줄만 골라
-# 바꾼다) - export를 다시 해도 아래 값이 그대로 유지된다.
+# 2-7 후속(사용자 요청) - 친구가 보내주는 로그 한 줄만으로 어느 커밋의
+# 코드인지 특정하기 위한 짧은 git 커밋 해시. 기본값 "unknown"은 git을 못
+# 읽는 환경(예: .git이 없는 빌드 컨텍스트)에서 그대로 남는 값이다 - 이
+# 상수를 못 채웠다고 빌드/export 자체가 실패해서는 안 된다.
+#
+# 두 곳에서 각자 독립적으로 이 값을 채운다(경로가 다르다):
+#   - 클라이언트(Web/Desktop export): addons/build_stamp/build_stamp_export_plugin.gd가
+#     BUILD_TIME과 같은 방식(export 시작 시 정규식 치환)으로 채운다.
+#   - 서버(Docker 이미지): 이 파일이 export 파이프라인을 안 거치고 그대로
+#     이미지에 들어가므로, Dockerfile이 이미지 빌드 중 같은 방식(sed)으로
+#     따로 채운다 - 둘 중 하나가 안 됐다고 다른 하나까지 막히지 않는다.
+# 작업 트리에 커밋 안 된 변경사항이 있으면 해시 뒤에 "-dirty"가 붙는다 -
+# 커밋 안 된 코드로 뽑은 빌드를 나중에 커밋된 것으로 착각하면 안 되므로.
+const BUILD_COMMIT := "unknown"
+
+# 이 두 상수는 addons/build_stamp가 건드리지 않는다(정규식이 BUILD_TIME/
+# BUILD_COMMIT 줄만 골라 바꾼다) - export를 다시 해도 아래 값이 그대로 유지된다.
 #
 # ============================================================
 # 개발/테스트용 디버그 기능을 전부 묶는 하나의 스위치.
@@ -44,7 +59,7 @@ static var DEBUG_MODE: bool = not OS.has_feature("yd_release")
 
 
 func _ready() -> void:
-	print("[YachtDice] 빌드: %s (디버그 기능: %s)" % [BUILD_TIME, "켜짐" if DEBUG_MODE else "꺼짐"])
+	print("[YachtDice] 빌드: %s (%s) (디버그 기능: %s)" % [BUILD_TIME, BUILD_COMMIT, "켜짐" if DEBUG_MODE else "꺼짐"])
 	if OS.has_feature("web"):
 		_stamp_browser()
 
@@ -64,8 +79,8 @@ func _stamp_browser() -> void:
 		b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#000;color:#0f0;font:12px monospace;padding:2px 6px;pointer-events:none;';
 		document.body.appendChild(b);
 	}
-	b.textContent = '빌드: %s (엔진 시작됨, %s)';
-	console.log('[YachtDice] 빌드: %s (엔진이 실제로 시작되어 이 GDScript가 실행됨, %s)');
+	b.textContent = '빌드: %s (%s) (엔진 시작됨, %s)';
+	console.log('[YachtDice] 빌드: %s (%s) (엔진이 실제로 시작되어 이 GDScript가 실행됨, %s)');
 })();
-""" % [BUILD_TIME, debug_label, BUILD_TIME, debug_label]
+""" % [BUILD_TIME, BUILD_COMMIT, debug_label, BUILD_TIME, BUILD_COMMIT, debug_label]
 	JavaScriptBridge.eval(js, true)

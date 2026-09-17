@@ -14,6 +14,7 @@ extends EditorExportPlugin
 
 const BUILD_INFO_PATH := "res://build_info.gd"
 const BUILD_TIME_PATTERN := "(?m)^const BUILD_TIME := \".*\"$"
+const BUILD_COMMIT_PATTERN := "(?m)^const BUILD_COMMIT := \".*\"$"
 
 
 func _get_name() -> String:
@@ -41,12 +42,24 @@ func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, 
 	var content := file.get_as_text()
 	file.close()
 
-	var regex := RegEx.new()
-	regex.compile(BUILD_TIME_PATTERN)
-	if regex.search(content) == null:
+	var time_regex := RegEx.new()
+	time_regex.compile(BUILD_TIME_PATTERN)
+	if time_regex.search(content) == null:
 		push_error("BuildStamp: %s에서 BUILD_TIME 줄을 못 찾음 - 형식이 바뀌었을 수 있음" % BUILD_INFO_PATH)
 		return
-	var new_content := regex.sub(content, "const BUILD_TIME := \"%s\"" % timestamp, true)
+	var new_content := time_regex.sub(content, "const BUILD_TIME := \"%s\"" % timestamp, true)
+
+	# 2-7 후속 - 커밋 해시도 같은 방식(정규식 한 줄 치환)으로 채운다. git이
+	# 없거나 실패해도(예: git 저장소 밖에서 export하는 드문 경우) export
+	# 자체는 절대 막지 않는다 - 이때는 build_info.gd의 기존 기본값("unknown")이
+	# 그대로 남는다.
+	var commit := _current_git_commit()
+	var commit_regex := RegEx.new()
+	commit_regex.compile(BUILD_COMMIT_PATTERN)
+	if commit_regex.search(new_content) != null:
+		new_content = commit_regex.sub(new_content, "const BUILD_COMMIT := \"%s\"" % commit, true)
+	else:
+		print("BuildStamp: %s에서 BUILD_COMMIT 줄을 못 찾음 - 형식이 바뀌었을 수 있음(커밋 스탬프는 건너뜀)" % BUILD_INFO_PATH)
 
 	var out := FileAccess.open(BUILD_INFO_PATH, FileAccess.WRITE)
 	if out == null:
@@ -54,4 +67,27 @@ func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, 
 		return
 	out.store_string(new_content)
 	out.close()
-	print("BuildStamp: 빌드 시각을 %s로 찍음" % timestamp)
+	print("BuildStamp: 빌드 시각을 %s, 커밋을 %s로 찍음" % [timestamp, commit])
+
+
+## 짧은 git 커밋 해시를 돌려준다. 작업 트리에 커밋 안 된 변경사항이 있으면
+## "-dirty"를 붙인다(커밋 안 된 코드로 뽑은 빌드를 나중에 커밋된 것으로
+## 착각하면 안 되므로). git이 없거나 이 폴더가 git 저장소가 아니면(둘 다
+## export 자체를 막을 이유는 아님) "unknown"을 돌려준다 - 실패를 절대 밖으로
+## 전파하지 않는다.
+func _current_git_commit() -> String:
+	var project_dir := ProjectSettings.globalize_path("res://")
+
+	var hash_output := []
+	var hash_exit := OS.execute("git", ["-C", project_dir, "rev-parse", "--short", "HEAD"], hash_output, true)
+	if hash_exit != 0 or hash_output.is_empty():
+		return "unknown"
+	var commit_hash: String = String(hash_output[0]).strip_edges()
+	if commit_hash.is_empty():
+		return "unknown"
+
+	var status_output := []
+	var status_exit := OS.execute("git", ["-C", project_dir, "status", "--porcelain"], status_output, true)
+	var is_dirty := status_exit == 0 and not status_output.is_empty() and not String(status_output[0]).strip_edges().is_empty()
+
+	return "%s-dirty" % commit_hash if is_dirty else commit_hash
