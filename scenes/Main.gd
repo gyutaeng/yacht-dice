@@ -685,8 +685,23 @@ func _on_connection_status_changed() -> void:
 	reconnect_overlay_leave_button.visible = false
 
 
+## 탭 비가시화 안내(사용자 확정, docs/deployment_checklist.md "탭 비가시화
+## 안내 구현 범위" 참고) - 예전엔 재접속 성공 시 배너를 즉시 조용히
+## 숨겨서, "재접속 중..."을 놓친 사람(정확히 탭이 백그라운드에 있던
+## 사람 - 이 안내가 필요한 바로 그 대상)은 아무 설명도 못 봤다. 원인이
+## 탭 비가시화든 네트워크 순단이든 구분하지 않는다 - "끊겼다가
+## 복구됐고, 진행 상황은 그대로다"라는 사실만 잠깐 보여주면 충분하다는
+## 판단. 새 UI 노드/JS 브릿지 없이 기존 reconnect_overlay를 재사용한다.
 func _on_game_reconnected() -> void:
-	reconnect_overlay.visible = false
+	var recovered_text := "연결이 잠시 끊겼다가 복구되었습니다. 진행 상황은 그대로입니다."
+	reconnect_status_label.text = recovered_text
+	reconnect_overlay.visible = true
+	reconnect_overlay_leave_button.visible = false
+	await get_tree().create_timer(3.0).timeout
+	# 3초를 기다리는 동안 다른 상태 변화(예: 곧바로 또 끊김)가 이 라벨을
+	# 이미 바꿔놨다면, 그 최신 메시지를 덮어쓰지 않고 그대로 둔다.
+	if reconnect_status_label.text == recovered_text:
+		reconnect_overlay.visible = false
 
 
 func _on_reconnect_exhausted() -> void:
