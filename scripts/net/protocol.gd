@@ -141,7 +141,20 @@ const REMATCH_READY_TIMEOUT_MSEC := 120000
 # 최대 1분 걸림)과 게임 도중 재접속 양쪽에 공용으로 쓰는 재시도 상한
 # (ReconnectBackoff). 상수 하나로 묶어서 "재시도 로직을 따로 안 만든다"는
 # 원칙을 지킨다.
-const MAX_RECONNECT_ATTEMPTS := 5
+#
+# 콜드 스타트 재접속 예산 후속(2026-09-17, Render 공식 안내 확인) - Render
+# 문서 원문: "Your free instance will spin down with inactivity, which can
+# delay requests by 50 seconds or more." 예전 값(5)으로는 백오프 합이
+# 31초뿐이라 안전 마진이 없었다 - 실제로 도달 불가능한 주소로 재현해보니
+# (연결 시도 자체가 빠르게 실패하는 경우) 5회 만에 약 49초 만에 재시도를
+# 포기하는 것을 확인했다(GameClient.CONNECT_TIMEOUT_SEC가 있어도, 연결이
+# "오래 걸려서" 실패하는 게 아니라 "빠르게 거부"당하면 그 타임아웃은
+# 아예 안 걸리므로 총 대기 시간을 못 늘려준다 - 실측으로 확인). 즉 총
+# 대기 시간을 안정적으로 보장하는 건 각 시도의 소요 시간이 아니라
+# **백오프 합 자체**다. 9로 늘리면 백오프만으로 1+2+4+8+16+16+16+16+16=95초가
+# 보장된다(각 시도가 얼마나 빨리/느리게 실패하는지와 무관하게 항상
+# 성립) - Render의 "50초 이상"에 충분한 여유를 더한 값.
+const MAX_RECONNECT_ATTEMPTS := 9
 
 # 2-6(연결 끊김 감지, docs/multiplayer.md §6) - "WebSocket 레벨 ping/pong"
 # 대신 애플리케이션 레벨 메시지로 직접 구현한다(2-5 후속 §8.5-6에서 얻은

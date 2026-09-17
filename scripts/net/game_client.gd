@@ -71,9 +71,18 @@ enum State { IDLE, CONNECTING, AWAITING_HELLO_ACK, CONNECTED }
 # WebSocketMultiplayerPeer가 CONNECTING/AWAITING_HELLO_ACK 상태에서 영원히
 # 안 바뀌면(예: 서버가 응답 없이 그냥 걸려있는 경우) 이 클라이언트는
 # 무한정 기다리기만 하고 재시도 루프(ReconnectBackoff)로 절대 안 넘어갔다.
-# 이제 이 상태로 CONNECT_TIMEOUT_SEC를 넘기면 직접 실패로 판정한다 -
-# ReconnectBackoff의 재시도 사이 대기 합(1+2+4+8+16=31초) + 이 값 × 최대
-# 시도 수(6회) ≈ 91초로, 사용자가 확정한 안전값(약 90초)에 맞춘 것이다.
+# 이 상태로 CONNECT_TIMEOUT_SEC를 넘기면 직접 실패로 판정해서, 최소한
+# 그런 "영원히 안 끝나는 시도" 한 번 때문에 전체 재시도 루프가 멈추는
+# 일은 없게 한다.
+#
+# **정정(실측 확인) - 이 값이 총 대기 시간을 늘려주는 게 아니다.** 처음엔
+# "이 값 × 시도 횟수"를 더해서 총 예산(약 90초)을 계산했는데, 실제로
+# 도달 불가능한 주소로 재현해보니 연결 시도가 이 10초를 다 못 채우고
+# 훨씬 빨리(약 3초 만에) 실패하는 경우가 있었다 - 그러면 이 타임아웃은
+# 아예 안 걸리고, 총 대기 시간은 전적으로 `NetProtocol.MAX_RECONNECT_ATTEMPTS`/
+# `ReconnectBackoff`의 백오프 합에만 좌우된다(그쪽 상수 주석 참고 - 백오프
+# 자체를 90초 이상으로 늘렸다). 이 상수는 어디까지나 "한 시도가 무한정
+# 안 끝나는 것"만 막는 안전장치이지, 총 예산 확보 수단이 아니다.
 const CONNECT_TIMEOUT_SEC := 10.0
 
 var _peer := WebSocketMultiplayerPeer.new()

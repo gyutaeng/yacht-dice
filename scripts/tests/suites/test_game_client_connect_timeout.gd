@@ -84,17 +84,19 @@ func _test_ever_hello_acknowledged_survives_reset(r) -> void:
 	_free_client(client)
 
 
-## 사용자가 확정한 안전값(약 90초)과 실제 상수 조합이 맞는지 - 나중에 누가
-## CONNECT_TIMEOUT_SEC나 재시도 횟수를 조정하면서 이 관계를 깨면 여기서
-## 바로 잡힌다.
+## Render 공식 안내("50 seconds or more") 대비 안전 마진 확인 - 실측으로
+## 확인된 대로(연결 시도가 CONNECT_TIMEOUT_SEC를 다 못 채우고 빨리 실패할
+## 수 있음) 총 대기 시간을 안정적으로 보장하는 건 각 시도의 소요 시간이
+## 아니라 백오프 합 그 자체다 - 그래서 이 값만으로 검증한다(CONNECT_TIMEOUT_SEC는
+## 여기 계산에 안 넣는다 - 있으면 늘어날 수 있는 보너스일 뿐, 있다고
+## 가정하면 안 되는 값이기 때문). 나중에 누가 MAX_RECONNECT_ATTEMPTS나
+## 백오프 값을 조정하면서 이 마진을 깨면 여기서 바로 잡힌다.
 func _test_budget_matches_user_confirmed_safe_value(r) -> void:
 	var backoff := ReconnectBackoff.new()
 	var backoff_sum_sec := 0.0
 	while backoff.has_attempts_left():
 		backoff_sum_sec += backoff.next_delay_sec()
-	var total_attempts := NetProtocol.MAX_RECONNECT_ATTEMPTS + 1  # 최초 1회 + 재시도
-	var worst_case_sec := backoff_sum_sec + total_attempts * GameClient.CONNECT_TIMEOUT_SEC
 
-	r.expect_eq("백오프 합이 31초(1+2+4+8+16)", backoff_sum_sec, 31.0)
-	r.expect_eq("총 시도 횟수가 6회", total_attempts, 6)
-	r.expect_true("최악의 경우 총 대기 시간이 사용자 확정 안전값(약 90초) 근처(85~95초)", worst_case_sec >= 85.0 and worst_case_sec <= 95.0)
+	r.expect_eq("백오프 합이 95초(1+2+4+8+16+16+16+16+16)", backoff_sum_sec, 95.0)
+	r.expect_eq("총 재시도 횟수가 9회(NetProtocol.MAX_RECONNECT_ATTEMPTS)", NetProtocol.MAX_RECONNECT_ATTEMPTS, 9)
+	r.expect_true("백오프 합만으로도 Render 공식 안내(50초 이상)에 충분한 여유(45초 이상)", backoff_sum_sec - 50.0 >= 45.0)
