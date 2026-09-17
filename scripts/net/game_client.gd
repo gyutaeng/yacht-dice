@@ -386,6 +386,18 @@ func _send(type: String, payload: Dictionary, on_sent: Callable = Callable()) ->
 
 
 func _flush_outgoing_queue() -> void:
+	# 웹 탭 비가시화 조사 후속(2026-09-17) - 큐가 비어있으면 볼 일이 없는데도
+	# 매 프레임 무조건 get_peer(1)을 불렀다. 서버가 이미 이 접속을 끊은
+	# 직후(예: 탭이 백그라운드에 있다 돌아온 첫 프레임)엔 엔진의 내부 peer
+	# 맵에서 이 ID가 이미 지워진 상태라, 없는 ID로 get_peer()를 부르면
+	# 엔진이 콘솔에 "Condition "!peers_map.has(p_id)" is true" ERROR를
+	# 찍는다(기능엔 영향 없음 - 바로 다음 줄에서 정상적으로 연결 끊김이
+	# 감지됨. 실제 소켓으로 재현 확인함, docs/multiplayer.md §12). 큐가
+	# 비어있을 땐 애초에 이 값을 안 쓰므로, 조회 자체를 건너뛰어 이
+	# 노이즈를 없앤다.
+	if _outgoing_queue.is_empty():
+		return
+
 	var server_peer := _peer.get_peer(1)
 	while not _outgoing_queue.is_empty():
 		# 확정 2 후속 - put_packet() 전에 버퍼에 여유가 있는지 먼저 확인한다
