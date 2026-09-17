@@ -154,6 +154,7 @@ func _ready() -> void:
 	_client.player_left.connect(_on_player_left)
 	_client.transferring_started.connect(_on_transferring_started)
 	_client.game_started.connect(_on_game_started)
+	_client.game_ended.connect(_on_game_ended)
 	_client.server_error.connect(_on_server_error)
 	_client.disconnected.connect(_on_disconnected)
 	# 2-6B(같은 방에서 재대전) - "rematch" 종류의 카운트다운만 여기서
@@ -539,6 +540,28 @@ func _on_player_character_changed(player_index: int, meta: Dictionary) -> void:
 func _on_player_ready_changed(player_index: int, ready: bool) -> void:
 	if _players.has(player_index):
 		_players[player_index]["ready"] = ready
+	_refresh_lobby_ui()
+
+
+## 2-6B 후속(친구 대상 베타 재현, "ready 중복 근본 원인 수정"이 실제로는
+## 안 듣던 문제) - 서버의 Room.begin_rematch_wait()는 게임이 끝나는
+## 순간 전원의 ready를 false로 되돌리지만, 그 사실을 알리는 메시지가
+## 따로 없다(player_ready_changed 브로드캐스트 없음 - 새 메시지를 안 만들고
+## 조용히 리셋하는 설계). 그래서 게임 종료 직후 로컬 `_players` 캐시는
+## 그 판을 시작할 때의 값(항상 true - 전원 준비돼야 게임이 시작되므로)을
+## 그대로 들고 있다가, 재대전 대기 화면에서 준비 버튼을 처음 누르면
+## "이미 true인 걸 false로" 토글한 값이 나가는데 서버는 이미 false라
+## "동일한 ready 값이 연속으로 수신됨" 경고가 뜬다 - 로그 노이즈로
+## 끝나지 않고 실제 버그이기도 하다: 버튼 라벨이 "준비 취소"(캐시가
+## true라서)로 잘못 떠서, 유저는 이미 준비된 줄 알고 아무것도 안
+## 누르지만 서버는 준비 안 된 상태로 남아 재대전 대기 타임아웃(2분)에
+## 강제 퇴장될 수 있다. `game_ended`(서버가 `begin_rematch_wait()`를
+## 부르는 바로 그 순간 함께 오는 신호)를 받으면 클라이언트도 로컬
+## 캐시를 똑같이 리셋해서 서버와 다시 맞춘다 - 새 네트워크 메시지를
+## 안 만들고 이미 오는 신호에 맞춰 로컬만 고치는 방식.
+func _on_game_ended(_winners: Array, _scores: Array) -> void:
+	for player_index in _players.keys():
+		_players[player_index]["ready"] = false
 	_refresh_lobby_ui()
 
 

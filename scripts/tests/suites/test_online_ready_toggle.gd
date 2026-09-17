@@ -13,6 +13,7 @@ extends RefCounted
 func run(r) -> void:
 	r.begin_suite("온라인 준비 버튼 - 연속 호출이 같은 값을 두 번 안 보냄")
 	_test_double_press_toggles_instead_of_repeating(r)
+	_test_game_ended_resets_local_ready_cache(r)
 
 
 func _make_screen() -> Control:
@@ -38,6 +39,33 @@ func _test_double_press_toggles_instead_of_repeating(r) -> void:
 	screen._on_ready_button_pressed()
 	var after_second: bool = screen._players[0]["ready"]
 	r.expect_eq("두 번째 호출(왕복 전에 또 불려도): true -> false, 같은 값 반복 아님", after_second, false)
+
+	screen.get_parent().remove_child(screen)
+	screen.free()
+
+
+## 크래시 재현 테스트 후속(사용자 지적, 실제 로그로 확인) - 위 수정으로도
+## 서버의 "동일한 ready 값이 연속으로 수신됨" 경고가 그대로 찍혔다. 진짜
+## 원인은 다른 곳: 서버의 Room.begin_rematch_wait()가 게임이 끝나는
+## 순간 전원의 ready를 false로 되돌리는데, 그걸 클라이언트에 알리는
+## 메시지가 따로 없다 - 그래서 게임이 막 끝난 시점 로컬 _players 캐시는
+## 그 판을 시작할 때의 값(항상 true)을 그대로 들고 있다가, 재대전
+## 대기 화면에서 준비 버튼을 처음 누르면 "이미 true인 걸 false로" 토글한
+## 값이 나가는데 서버는 이미 false라 중복이 됐다(위 수정은 "같은 클릭
+## 안에서의 중복 이벤트"만 막았을 뿐, "서버와 로컬 캐시가 애초에
+## 어긋나 있는 것"은 다른 문제라 안 막혔다). game_ended를 받으면 로컬
+## 캐시도 서버와 같이 리셋하는지 확인한다.
+func _test_game_ended_resets_local_ready_cache(r) -> void:
+	var screen := _make_screen()
+	screen._players = {
+		0: {"meta": {}, "ready": true},
+		1: {"meta": {}, "ready": true},
+	}
+
+	screen._on_game_ended([0], [150])
+
+	r.expect_eq("game_ended 이후 슬롯 0 ready가 false로 리셋됨", screen._players[0]["ready"], false)
+	r.expect_eq("game_ended 이후 슬롯 1 ready도 false로 리셋됨", screen._players[1]["ready"], false)
 
 	screen.get_parent().remove_child(screen)
 	screen.free()
