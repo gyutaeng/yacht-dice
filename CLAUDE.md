@@ -2097,13 +2097,23 @@ margin 계산 자체가 오설정에서 영원히 거짓이 될 수 있다는 �
     port"가 이 단계를 가리킨 것이었다. **이 판단은 실제 배포 로그로
     확정된 것이라 앞으로 후보 A/B를 다시 검토하지 않는다** - 자세한
     로그/해석은 `docs/deployment_checklist.md` "단계 5 — 첫 배포 결과"
-    절 참고. **후보 C(nginx 내부 프록시) 구현 + 로컬 검증 완료, 이어서
-    실제 첫 재배포에서 발견된 후속 문제(Godot이 여전히 0.0.0.0에
+    절 참고. **후보 C(nginx 내부 프록시) 구현 + 로컬 검증 완료.**
+    이어서 실제 첫 재배포에서 발견된 후속 문제(Godot이 여전히 0.0.0.0에
     바인딩돼 있어 Render 스캐너가 내부 전용 포트까지 찔러봄, "Detected
-    a new open port TCP:8910" 반복)도 바인드 주소를 `_resolve_bind_address()`
-    (포트와 같은 CLI 인자 우선 방식)로 127.0.0.1 고정해서 해결 - 자세한
-    경위/검증은 `docs/deployment_checklist.md` "후보 C 설계안"/"후속 -
-    첫 재배포에서 발견된 새 문제" 절 참고.**
+    a new open port TCP:8910" 반복)에 대해 바인드 주소를
+    `_resolve_bind_address()`(포트와 같은 CLI 인자 우선 방식)로
+    127.0.0.1 고정하는 수정을 넣었지만, **이 진단은 틀렸다(사용자
+    지적, 정정됨)** - 재배포 후에도 같은 에러가 그대로 반복돼, Render의
+    포트 스캐너가 컨테이너 **내부**(같은 네트워크 네임스페이스)에서
+    동작한다는 게 드러났다(외부 접근을 가정한 127.0.0.1 바인딩으로는
+    가려지지 않음). **127.0.0.1 바인딩 자체는 외부 노출을 줄이는
+    올바른 방향이라 유지하지만, 스캐너 소음의 해결책은 아니다** - 이건
+    "고장이 아니라 소음"으로 판단하고(헬스 응답/외부 접속/nginx 경유
+    전부 정상) 단계 6 측정을 미루지 않기로 했다. 자세한 경위/검증
+    한계/다음 시도(Render Environment 탭에 PORT를 명시적으로 추가)는
+    `docs/deployment_checklist.md` "후보 C 설계안"/"후속 - 첫
+    재배포에서 발견된 새 문제"/"정정 - 127.0.0.1 바인딩은 원인 진단이
+    틀렸다" 절 참고.**
   - 출처: [Health Checks – Render Docs](https://render.com/docs/health-checks),
     [Deploy to Render - websockets docs](https://websockets.readthedocs.io/en/14.1/howto/render.html)
 
